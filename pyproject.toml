@@ -1,0 +1,22 @@
+[project]
+name = "crumb"
+version = "0.1.0"
+description = "Crumb's Picnic Run: a toast platformer with procedural chiptune music."
+readme = "README.md"
+authors = [
+    { name = "owenmeiring", email = "owenm3iring@gmail.com" }
+]
+requires-python = ">=3.14"
+dependencies = [
+    "numpy>=2.5.3",
+    "pycairo>=1.29.1",
+    "pygame-ce>=2.5.8",
+    "sounddevice>=0.5.6",
+]
+
+[project.scripts]
+crumb = "crumb:main"
+
+[build-system]
+requires = ["uv_build>=0.12.22,<0.13.0"]
+build-backend = "uv_build"
