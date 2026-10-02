@@ -2,9 +2,21 @@
 
 A little toast named Crumb runs, hops and stomps through World 1's nine stages to reach the picnic and rescue a friend from the Grand Chili.
 
+**[Download the game for Windows (CrumbsPicnicRun.exe)](https://github.com/owenmeiring/crumbspicnicadventure/releases/latest/download/CrumbsPicnicRun.exe)**: one file, nothing to install. Windows SmartScreen may warn the first time because the exe isn't code-signed; choose "More info", then "Run anyway".
+
+To run from source instead:
+
 ```powershell
 uv run crumb
 ```
+
+### Building the .exe
+
+```powershell
+powershell -ExecutionPolicy Bypass -File packaging\build_exe.ps1
+```
+
+This makes `dist\CrumbsPicnicRun.exe`, a single file with Python, the game and its fonts inside, so it runs on any 64-bit Windows PC without installing anything. The game fills the whole screen at any widescreen shape (16:9, 16:10, ultrawide) by showing more of the level, with no black bars.
 
 ## World 1
 

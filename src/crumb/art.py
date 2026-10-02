@@ -378,7 +378,7 @@ _atmos = {}
 def atmos(top, side):
     """The ceiling shade and vignette never move, so they're rendered once per size."""
     global g
-    key = (top, side, RS)
+    key = (top, side, RS, VW)
     img = _atmos.get(key)
     if img is None:
         surf, cv = offscreen(VW * RS, VH * RS, RS)

@@ -1,6 +1,7 @@
 """Crumb's Picnic Run: a little toast's platformer adventure."""
 
 import json
+import math
 import os
 import time
 from pathlib import Path
@@ -9,11 +10,23 @@ import cairo
 import pygame
 
 from . import art, game
+from . import editor as editor_mod
 from . import ui as ui_mod
 from .audio import Audio
 from .canvas import Canvas
 from .editor import Editor
 from .game import S, VH, VW, O
+
+MIN_W, MAX_W = 512, 1024  # visible width in game pixels: 4:3 up to ultrawide (the height is always 384)
+
+
+def set_view_width(vw):
+    """Every module reads the visible width (VW) at draw time, so widening the view is one assignment each."""
+    global VW
+    VW = vw
+    for mod in (game, art, ui_mod, editor_mod):
+        mod.VW = vw
+    art.SW = vw / art.VIEW_K
 
 TITLE = "Crumb's Picnic Run"
 SAVE_DIR = Path(os.environ.get("APPDATA") or Path.home()) / "CrumbsPicnicRun"
@@ -129,9 +142,19 @@ class App:
         self.make_surface()
 
     def make_surface(self):
+        """Fill the whole window: the view is always 12 tiles tall and as wide as the screen's shape allows,
+        so widescreen and fullscreen show more of the level instead of black bars."""
         w, h = self.screen.get_size()
-        rs = max(1.0, min(w / VW, h / VH))
-        sw, sh = int(VW * rs), int(VH * rs)
+        aspect = w / max(1, h)
+        if aspect >= MIN_W / VH:
+            rs = h / VH
+            vw = min(MAX_W, math.ceil(w / rs))
+        else:  # narrower than 4:3 (rare): keep the 4:3 layout and centre it
+            rs = w / MIN_W
+            vw = MIN_W
+        set_view_width(vw)
+        rs = max(.5, rs)
+        sw, sh = math.ceil(vw * rs), math.ceil(VH * rs)
         self.surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, sw, sh)
         art.g = Canvas(self.surface)
         art.RS = rs

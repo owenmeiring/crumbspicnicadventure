@@ -27,7 +27,8 @@ K = .72            # world zoom while editing
 TOP = 34           # world view starts below the top bar and minimap
 VIEW_B = TOP + VH * K
 PANEL_Y = 311
-MM = (6, 21, 500, 12)  # minimap box
+def mm_box():
+    return (6, 21, VW - 12, 12)  # minimap strip, full width
 
 OL = "#2b1608"
 PANEL = "#2b1608"
@@ -647,7 +648,7 @@ class Editor:
                 if l <= x <= r and t <= y <= b:
                     fn()
                     return
-            mx, my, mw, mh = MM
+            mx, my, mw, mh = mm_box()
             if mx <= x <= mx + mw and my - 2 <= y <= my + mh + 2:
                 self.mm_drag = True
                 self.minimap_jump(x)
@@ -695,7 +696,7 @@ class Editor:
         self.mm_drag = False
 
     def minimap_jump(self, x):
-        mx, _, mw, _ = MM
+        mx, _, mw, _ = mm_box()
         col = (x - mx) / mw * self.E["w"]
         S.cam = max(0, min(self.max_cam(), col * T - VW / K / 2))
 
@@ -1035,7 +1036,7 @@ class Editor:
             self.build_minimap()
         c = art.g
         ctx = c.ctx
-        mx, my, mw, mh = MM
+        mx, my, mw, mh = mm_box()
         w = self.E["w"]
         ctx.save()
         ctx.translate(mx, my)

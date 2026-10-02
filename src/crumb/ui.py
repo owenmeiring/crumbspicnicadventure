@@ -254,16 +254,13 @@ def _logo_letter(ch, size, rot, col, hi):
     c.restore()
 
 
-RIBBON_BOX = (VW / 2 - 165, 105, 330, 60)
-
-
 def draw_ribbon():
-    bx, by, bw, bh = RIBBON_BOX
+    bx, by, bw, bh = VW / 2 - 165, 105, 330, 60
 
     def draw(cv):
         cv.translate(-bx, -by)
         _ribbon()
-    g().drawImageAt(_cached(("ribbon",), bw, bh, draw), bx, by)
+    g().drawImageAt(_cached(("ribbon", VW), bw, bh, draw), bx, by)
 
 
 def _ribbon():
@@ -318,11 +315,11 @@ def draw_plaque(menu, i, cx, cy, w, h, size, primary, t, sides=(-1, 1)):
     menu.rects.append((cx - w / 2 * s, cy - h / 2 * s, cx + w / 2 * s, cy + h / 2 * s + 5))
 
 
-TITLE_LAYOUT = [  # cx, cy, w, h, font size, primary, cookie sides
-    (VW / 2, 170, 210, 40, 25, True, (-1, 1)),
-    (VW / 2 - 78, 212, 148, 26, 14, False, (-1,)), (VW / 2 + 78, 212, 148, 26, 14, False, (1,)),
-    (VW / 2 - 78, 245, 148, 26, 14, False, (-1,)), (VW / 2 + 78, 245, 148, 26, 14, False, (1,)),
-    (VW / 2, 278, 110, 24, 13, False, (-1, 1)),
+TITLE_LAYOUT = [  # x offset from screen centre, cy, w, h, font size, primary, cookie sides
+    (0, 170, 210, 40, 25, True, (-1, 1)),
+    (-78, 212, 148, 26, 14, False, (-1,)), (78, 212, 148, 26, 14, False, (1,)),
+    (-78, 245, 148, 26, 14, False, (-1,)), (78, 245, 148, 26, 14, False, (1,)),
+    (0, 278, 110, 24, 13, False, (-1, 1)),
 ]
 TITLE_GRID = [[0], [1, 2], [3, 4], [5]]
 
@@ -333,8 +330,8 @@ def draw_title(menu, t):
     menu.rects = []
     draw_logo(t)
     draw_ribbon()
-    for i, (cx, cy, w, h, size, primary, sides) in enumerate(TITLE_LAYOUT[:len(menu.items)]):
-        draw_plaque(menu, i, cx, cy, w, h, size, primary, t, sides)
+    for i, (dx, cy, w, h, size, primary, sides) in enumerate(TITLE_LAYOUT[:len(menu.items)]):
+        draw_plaque(menu, i, VW / 2 + dx, cy, w, h, size, primary, t, sides)
     S.menu_rects = list(menu.rects)
     # best score badge
     best = "BEST " + str(S.best).zfill(6)
