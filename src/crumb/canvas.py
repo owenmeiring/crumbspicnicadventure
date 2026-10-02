@@ -417,7 +417,7 @@ class Canvas:
         dx, dy = ctx.user_to_device(x, y)
         ctx.save()
         ctx.identity_matrix()
-        blit(ctx, img, round(dx), round(dy), img.get_width(), img.get_height(), 1.0)
+        blit(ctx, img, round(dx), round(dy), img.get_width(), img.get_height(), self.globalAlpha)
         ctx.restore()
 
     def fillText(self, text, x, y):

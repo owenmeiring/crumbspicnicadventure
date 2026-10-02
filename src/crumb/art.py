@@ -4,10 +4,19 @@ import math
 import random
 
 from .canvas import offscreen, rr_path
-from .game import (GPL, GPW, OHD, OHM, PINKPAL, BASEPAL, ROLLCD, ROLLT, NAMES, H, S, T, VH, VW, mouth_y, ohs_of)
+from .game import (GPL, GPW, OHD, OHM, PINKPAL, BASEPAL, ROLLCD, ROLLT, THROW_RELEASE, THROW_T, H, S, T, VH, VW,
+                   level_name, mouth_y, ohs_of)
 
 g = None  # the Canvas, set by the app
 RS = 2.0  # render scale: device pixels per game pixel
+VIEW_K = 1.0  # world zoom (the level builder zooms out)
+VIEW_Y = 0.0  # top of the world view, in screen game-pixels
+SW = VW  # visible world width in game pixels (VW / VIEW_K)
+
+
+def set_view(k=1.0, y=0.0):
+    global VIEW_K, VIEW_Y, SW
+    VIEW_K, VIEW_Y, SW = k, y, VW / k
 OL = "#2b1608"
 PI = math.pi
 sin, cos = math.sin, math.cos
@@ -60,7 +69,8 @@ def hsh(a, b):
 
 
 def gsolid(x, y):
-    return 0 <= x < S.W and 0 <= y < H and S.grid[y][x] != 0
+    """Is there a ground-like tile here? (Crackers, jelly and spikes don't join up with the ground.)"""
+    return 0 <= x < S.W and 0 <= y < H and 0 < S.grid[y][x] < 8
 
 
 def glow(cx, cy, r0, r1, rgb, a):
@@ -86,29 +96,74 @@ def cookie_art(cx, cy, r):
     g.fillStyle = "#ffe2a8"; g.beginPath(); g.ellipse(cx - r * .5, cy - r * .55, r * .26, r * .14, -.7, 0, 7); g.fill()
 
 
-def pizza_art(cx, cy, r):
-    top = cy - r * .72
+def pizza_art(cx, cy, r, steam=True):
+    """A plump cel-shaded pizza slice: puffy crust, melty cheese drips, glossy pepperoni, a basil leaf."""
+    top = cy - r * .5
+    apex = cy + r * 1.2
+    L, R_ = cx - r * 1.02, cx + r * 1.02
 
-    def tri():
-        g.beginPath(); g.moveTo(cx - r, top); g.lineTo(cx + r, top); g.lineTo(cx, cy + r * 1.08); g.closePath()
+    def slice_path():
+        g.beginPath(); g.moveTo(L, top); g.lineTo(R_, top)
+        g.quadraticCurveTo(cx + r * .82, cy + r * .5, cx + r * .1, apex)
+        g.quadraticCurveTo(cx, apex + r * .14, cx - r * .1, apex)
+        g.quadraticCurveTo(cx - r * .82, cy + r * .5, L, top)
+        g.closePath()
 
+    def crust_path():
+        rr(L - r * .14, top - r * .48, (R_ - L) + r * .28, r * .66, r * .33)
+
+    def drips():
+        for sx, sy, ln in ((-.66, .22, .32), (.6, .38, .4), (-.3, .86, .26)):
+            x, y = cx + sx * r, cy + sy * r
+            g.beginPath(); g.moveTo(x - r * .13, y - r * .08); g.lineTo(x + r * .13, y - r * .08)
+            g.lineTo(x + r * .1, y + ln * r); g.arc(x, y + ln * r, r * .1, 0, PI); g.closePath()
+
+    if steam and r >= 9:
+        g.strokeStyle = "rgba(255,255,255,.55)"; g.lineWidth = 1.4; g.lineCap = "round"
+        for k in (-1, 1):
+            ph = S.tick * .08 + k
+            x0 = cx + k * r * .35
+            g.beginPath(); g.moveTo(x0, top - r * .6)
+            g.bezierCurveTo(x0 + sin(ph) * 3, top - r * .95, x0 - sin(ph) * 3, top - r * 1.2, x0 + sin(ph + 1) * 2,
+                            top - r * 1.55)
+            g.stroke()
+        g.lineCap = "butt"
     g.lineJoin = "round"
-    tri(); g.fillStyle = "#ffcf55"; g.fill()
-    g.save(); tri(); g.clip()
-    g.fillStyle = "#e9a52e"; g.beginPath(); g.moveTo(cx + r * .1, top); g.lineTo(cx + r, top); g.lineTo(cx, cy + r * 1.08); g.closePath(); g.fill()
-    g.fillStyle = "#ffe9a3"; g.beginPath(); g.ellipse(cx - r * .5, top + r * .85, r * .11, r * .35, .5, 0, 7); g.fill()
-    for p in [[-.32, -.12, .22], [.32, -.04, .2], [0, .42, .17]]:
-        g.fillStyle = "#6e1a12"; g.beginPath(); g.arc(cx + p[0] * r, cy + p[1] * r, r * p[2] + 1, 0, 7); g.fill()
-        g.fillStyle = "#d0402f"; g.beginPath(); g.arc(cx + p[0] * r, cy + p[1] * r, r * p[2], 0, 7); g.fill()
-        g.fillStyle = "#ff8a70"; g.beginPath(); g.arc(cx + p[0] * r - r * .06, cy + p[1] * r - r * .06, r * p[2] * .3, 0, 7); g.fill()
+    # chunky outline behind everything
+    g.strokeStyle = OL; g.lineWidth = max(2.6, r * .3)
+    slice_path(); g.stroke(); crust_path(); g.stroke(); drips(); g.fillStyle = OL; g.fill(); g.stroke()
+    # cheese with a shaded right side and a gloss streak
+    slice_path(); g.fillStyle = "#ffd04a"; g.fill()
+    drips(); g.fillStyle = "#ffd04a"; g.fill()
+    g.save(); slice_path(); g.clip()
+    g.fillStyle = "#f3a624"
+    g.beginPath(); g.moveTo(cx + r * .2, top); g.lineTo(R_ + 3, top); g.lineTo(cx + r * .12, apex + 3); g.closePath(); g.fill()
+    g.fillStyle = "#ffe891"; g.beginPath(); g.ellipse(cx - r * .5, top + r * .72, r * .12, r * .42, .42, 0, 7); g.fill()
+    for px, py, pr in ((-.4, .06, .26), (.36, .22, .22), (-.02, .76, .19)):
+        x, y, rad = cx + px * r, cy + py * r, pr * r
+        g.fillStyle = "#6e1a12"; g.beginPath(); g.arc(x, y + rad * .18, rad * 1.12, 0, 7); g.fill()
+        g.fillStyle = "#d8432e"; g.beginPath(); g.arc(x, y, rad, 0, 7); g.fill()
+        g.fillStyle = "#b02e1e"; g.beginPath(); g.arc(x + rad * .25, y + rad * .25, rad * .75, 0, 7)
+        g.arc(x, y, rad, 0, 7, True); g.fill("evenodd")
+        g.fillStyle = "#ff9a7a"; g.beginPath(); g.ellipse(x - rad * .35, y - rad * .38, rad * .32, rad * .2, -.6, 0, 7); g.fill()
+        g.fillStyle = "rgba(122,30,20,.6)"
+        for gx, gy in ((.3, -.1), (-.1, .35)):
+            g.beginPath(); g.arc(x + gx * rad, y + gy * rad, rad * .1, 0, 7); g.fill()
+    g.fillStyle = "#3f9a4a"
+    g.beginPath(); g.ellipse(cx + r * .42, cy - r * .18, r * .2, r * .1, -.7, 0, 7); g.fill()
+    g.strokeStyle = "#2b7539"; g.lineWidth = .7
+    g.beginPath(); g.moveTo(cx + r * .3, cy - r * .08); g.lineTo(cx + r * .54, cy - r * .3); g.stroke()
     g.restore()
-    tri(); g.strokeStyle = OL; g.lineWidth = 2; g.stroke()
-    cx0, cw, cy0, ch = cx - r - 1.5, r * 2 + 3, top - r * .34, r * .5
-    rr(cx0, cy0, cw, ch, r * .25); g.fillStyle = "#e6a95a"; g.fill()
-    g.save(); rr(cx0, cy0, cw, ch, r * .25); g.clip()
-    g.fillStyle = "#c0812f"; g.fillRect(cx0, cy0 + ch * .55, cw, ch); g.fillStyle = "#f7cf8a"; g.fillRect(cx0, cy0, cw, ch * .25)
+    # puffy crust with toasted spots
+    crust_path(); g.fillStyle = "#e9a24e"; g.fill()
+    g.save(); crust_path(); g.clip()
+    g.fillStyle = "#c27a2c"; g.fillRect(L - r, top - r * .02, (R_ - L) + 2 * r, r)
+    g.fillStyle = "#ffd38a"; g.beginPath(); g.ellipse(cx - r * .15, top - r * .32, r * .8, r * .1, 0, 0, 7); g.fill()
+    g.fillStyle = "#a8601e"
+    for dx in (-.65, -.1, .45, .8):
+        g.beginPath(); g.ellipse(cx + dx * r, top - r * .14, r * .07, r * .045, 0, 0, 7); g.fill()
     g.restore()
-    rr(cx0, cy0, cw, ch, r * .25); g.strokeStyle = OL; g.lineWidth = 2; g.stroke()
+    crust_path(); g.strokeStyle = OL; g.lineWidth = max(1.4, r * .15); g.stroke()
 
 
 # ======================================================================= backgrounds
@@ -116,7 +171,7 @@ def tile_x(period, par, fn):
     rc = round(S.cam)
     off = -((rc * par) % period)
     x = off - period
-    while x < VW + period:
+    while x < SW + period:
         fn(x)
         x += period
 
@@ -125,7 +180,7 @@ def wdeco(period, fn):
     rc = round(S.cam)
     off = -(rc % period)
     x = off - period
-    while x < VW + period:
+    while x < SW + period:
         fn(x, x + rc)
         x += period
 
@@ -136,11 +191,11 @@ def hill_y(sx, par, base, amp, f):
 
 
 def hill(par, base, amp, f, col, edge):
-    pts = [(x, hill_y(x, par, base, amp, f)) for x in range(0, VW + 9, 8)]
+    pts = [(x, hill_y(x, par, base, amp, f)) for x in range(0, int(SW) + 9, 8)]
     g.beginPath(); g.moveTo(0, VH)
     for p in pts:
         g.lineTo(*p)
-    g.lineTo(VW, VH); g.closePath(); g.fillStyle = col; g.fill()
+    g.lineTo(SW, VH); g.closePath(); g.fillStyle = col; g.fill()
     g.strokeStyle = edge; g.lineWidth = 2; g.beginPath(); g.moveTo(*pts[0])
     for p in pts[1:]:
         g.lineTo(*p)
@@ -226,7 +281,7 @@ FC = ["#ff5d73", "#ffd84d", "#ffffff", "#ff9ad5", "#8fb6ff"]
 def sun():
     P = S.P
     p = max(0, min(1, P.x / (S.W * T))) if P else 0
-    sx, sy, r = 70 + p * (VW - 140), 88 - sin(p * PI) * 40, 17
+    sx, sy, r = 70 + p * (SW - 140), 88 - sin(p * PI) * 40, 17
     glow(sx, sy, r * .5, r * 3, "255,240,150", .55)
     g.save(); g.translate(sx, sy); g.rotate(S.tick * .004); g.strokeStyle = "#e8a020"; g.lineWidth = 3; g.lineCap = "round"
     for i in range(10):
@@ -245,13 +300,13 @@ def bg_lawn():
     tick = S.tick
     sky = g.createLinearGradient(0, 0, 0, VH)
     sky.addColorStop(0, "#6cb8e6"); sky.addColorStop(.6, "#bfe6f2"); sky.addColorStop(1, "#fdeec4")
-    g.fillStyle = sky; g.fillRect(0, 0, VW, VH)
+    g.fillStyle = sky; g.fillRect(0, 0, SW, VH)
     sun(); mountains()
     for i in range(5):
         x = ((i * 260 - S.cam * .12 + tick * .1) % 1300 + 1300) % 1300 - 150
         cloud(x, 44 + (i * 37) % 64, .8 + (i % 3) * .25)
     for i in range(3):
-        x = ((tick * .55 + i * 190) % (VW + 80) + VW + 80) % (VW + 80) - 40
+        x = ((tick * .55 + i * 190) % (SW + 80) + SW + 80) % (SW + 80) - 40
         bird(x, 64 + i * 24 + sin(tick * .03 + i * 2) * 6, tick * .22 + i * 1.7)
     hill(.2, 268, 14, .006, "#a4d98f", "#86c477")
     hill(.35, 292, 16, .007, "#82c96f", "#62b056")
@@ -265,7 +320,7 @@ def bg_lawn():
             g.fillStyle = "rgba(35,100,55,.25)"; g.beginPath(); g.ellipse(x, hill_y(x, .35, 292, 16, .007) + 4, 15 * t[1], 3, 0, 0, 7); g.fill()
     tile_x(560, .35, shadows)
     dg = g.createLinearGradient(0, 322, 0, VH); dg.addColorStop(0, "rgba(24,60,40,0)"); dg.addColorStop(1, "rgba(20,45,35,.6)")
-    g.fillStyle = dg; g.fillRect(0, 322, VW, VH - 322)
+    g.fillStyle = dg; g.fillRect(0, 322, SW, VH - 322)
 
     def flowers(sx, wx):
         k = math.floor(wx / 256)
@@ -283,10 +338,10 @@ def brick_wall(par, col):
     off = -((round(S.cam) * par) % 48)
     rects = []
     for y in range(64, 320, 24):
-        rects.append((0, y, VW, 1.5))
+        rects.append((0, y, SW, 1.5))
         st = 24 if ((y - 64) // 24) % 2 else 0
         x = off - 48 + st
-        while x < VW + 48:
+        while x < SW + 48:
             rects.append((x, y, 1.5, 24))
             x += 48
     g.fillStyle = col
@@ -350,9 +405,9 @@ def _atmos_draw(top, side):
 def bg_cellar():
     tick = S.tick
     s = g.createLinearGradient(0, 0, 0, VH); s.addColorStop(0, "#1a1530"); s.addColorStop(1, "#2d2447")
-    g.fillStyle = s; g.fillRect(0, 0, VW, VH)
+    g.fillStyle = s; g.fillRect(0, 0, SW, VH)
     brick_wall(.4, "rgba(255,255,255,.05)")
-    g.fillStyle = "rgba(0,0,0,.28)"; g.fillRect(0, 292, VW, 28); g.fillStyle = "rgba(255,255,255,.07)"; g.fillRect(0, 292, VW, 1.5)
+    g.fillStyle = "rgba(0,0,0,.28)"; g.fillRect(0, 292, SW, 28); g.fillStyle = "rgba(255,255,255,.07)"; g.fillRect(0, 292, SW, 1.5)
     atmos(.4, .5)
     tile_x(600, .6, lambda ox: lantern(ox + 280, 146))
 
@@ -362,7 +417,7 @@ def bg_cellar():
             barrel(sx + 120, 320)
     wdeco(704, barrels)
     for i in range(14):
-        x = ((i * 97 + tick * (.08 + (i % 3) * .05) - round(S.cam) * (.25 + (i % 4) * .1)) % VW + VW) % VW
+        x = ((i * 97 + tick * (.08 + (i % 3) * .05) - round(S.cam) * (.25 + (i % 4) * .1)) % SW + SW) % SW
         y = 90 + ((i * 53) % 210) + sin(tick * .03 + i) * 10
         g.globalAlpha = .3 + .3 * sin(tick * .05 + i * 2); g.fillStyle = "#ffe9a0"
         g.beginPath(); g.arc(x, y, 1.5 + (i % 2), 0, 7); g.fill()
@@ -456,58 +511,346 @@ def chimney(x):
 def bg_kitchen():
     tick = S.tick
     s = g.createLinearGradient(0, 0, 0, VH); s.addColorStop(0, "#2a0f12"); s.addColorStop(1, "#4a1a14")
-    g.fillStyle = s; g.fillRect(0, 0, VW, VH)
+    g.fillStyle = s; g.fillRect(0, 0, SW, VH)
     brick_wall(.4, "rgba(255,255,255,.035)")
     tile_x(256, .4, lambda ox: (arc_window(ox + 128), stone_column(ox)))
     rc = round(S.cam)
     off = -((rc * .4) % 20)
     sc = math.floor((rc * .4) / 20)
     ox = S.KX * T - rc
-    if -200 < ox < VW + 200:
+    if -200 < ox < SW + 200:
         chimney(ox)
-    g.fillStyle = OL; g.fillRect(0, 226, VW, 12); g.fillStyle = "#8f6d62"; g.fillRect(0, 228, VW, 8)
-    g.fillStyle = "#b58f82"; g.fillRect(0, 228, VW, 2); g.fillStyle = "#5b423b"; g.fillRect(0, 233, VW, 3)
-    g.fillStyle = "#4a1814"; g.fillRect(0, 238, VW, 82)
+    g.fillStyle = OL; g.fillRect(0, 226, SW, 12); g.fillStyle = "#8f6d62"; g.fillRect(0, 228, SW, 8)
+    g.fillStyle = "#b58f82"; g.fillRect(0, 228, SW, 2); g.fillStyle = "#5b423b"; g.fillRect(0, 233, SW, 3)
+    g.fillStyle = "#4a1814"; g.fillRect(0, 238, SW, 82)
     checks, shine, lines = [], [], []
     for r in range(4):
         x, c = off - 20, 0
-        while x < VW + 20:
+        while x < SW + 20:
             if (r + sc + c) % 2 == 0:
                 checks.append((x, 238 + r * 20, 20, 20))
             shine.append((x, 238 + r * 20, 20, 2))
             x += 20
             c += 1
     for r in range(5):
-        lines.append((0, 238 + r * 20, VW, 1.5))
+        lines.append((0, 238 + r * 20, SW, 1.5))
     x = off - 20
-    while x < VW + 20:
+    while x < SW + 20:
         lines.append((x, 238, 1.5, 80))
         x += 20
     g.fillStyle = "#5f211b"; g.fillRects(checks)
     g.fillStyle = "rgba(255,170,120,.10)"; g.fillRects(shine)
     g.fillStyle = "rgba(0,0,0,.35)"; g.fillRects(lines)
     atmos(.35, .4)
-    if -160 < ox < VW + 160:
+    if -160 < ox < SW + 160:
         grand_oven(ox)
     for i in range(18):
         life = (tick * (.5 + (i % 5) * .15) + i * 61) % 320
         y = VH - life
-        x = ((i * 97 + sin(life * .05 + i) * 14 - rc * (.3 + (i % 4) * .08)) % VW + VW) % VW
+        x = ((i * 97 + sin(life * .05 + i) * 14 - rc * (.3 + (i % 4) * .08)) % SW + SW) % SW
         g.globalAlpha = (1 - life / 320) * .85; g.fillStyle = "#ffb347" if i % 3 else "#ff6a1f"
         g.fillRect(x, y, 2 + (i % 3), 2 + (i % 3))
     g.globalAlpha = 1
     gl = g.createLinearGradient(0, 220, 0, VH)
     gl.addColorStop(0, "rgba(255,90,30,0)"); gl.addColorStop(1, f"rgba(255,90,30,{.28 + sin(tick * .08) * .05})")
-    g.fillStyle = gl; g.fillRect(0, 220, VW, VH - 220)
+    g.fillStyle = gl; g.fillRect(0, 220, SW, VH - 220)
+
+
+def _vgrad(stops):
+    gr = g.createLinearGradient(0, 0, 0, VH)
+    for off, col in stops:
+        gr.addColorStop(off, col)
+    g.fillStyle = gr
+    g.fillRect(0, 0, SW, VH)
+
+
+def _wrap(x, period):
+    return ((x % period) + period) % period
+
+
+def bee(x, y, ph):
+    g.save(); g.translate(x, y)
+    w = abs(sin(ph)) * 4 + 1.5
+    g.fillStyle = "rgba(255,255,255,.75)"; g.strokeStyle = "rgba(43,22,8,.6)"; g.lineWidth = .7
+    g.beginPath(); g.ellipse(-2, -5, 3, w, -.4, 0, 7); g.fill(); g.stroke()
+    g.beginPath(); g.ellipse(2, -5, 3, w, .4, 0, 7); g.fill(); g.stroke()
+    g.fillStyle = OL; g.beginPath(); g.ellipse(0, 0, 6, 4.4, 0, 0, 7); g.fill()
+    g.fillStyle = "#ffd23f"; g.beginPath(); g.ellipse(0, 0, 4.8, 3.3, 0, 0, 7); g.fill()
+    g.fillStyle = OL; g.fillRect(-1.6, -3.3, 1.4, 6.6); g.fillRect(1.4, -3.3, 1.2, 6.6)
+    g.fillStyle = "#fff"; g.beginPath(); g.arc(4, -1, 1.1, 0, 7); g.fill()
+    g.restore()
+
+
+def bg_honey():
+    tick, rc = S.tick, round(S.cam)
+    _vgrad([(0, "#2a1604"), (.55, "#5a3408"), (1, "#7a4a0c")])
+    # far honeycomb wall, softly lit
+    off = -((rc * .15) % 45)
+    g.strokeStyle = "rgba(255,200,90,.11)"; g.lineWidth = 2
+    g.beginPath()
+    for row in range(10):
+        y = 52 + row * 39
+        for col in range(int(SW / 45) + 3):
+            x = off + col * 45 + (22.5 if row % 2 else 0)
+            for i in range(7):
+                a = PI / 3 * i + PI / 6
+                (g.lineTo if i else g.moveTo)(x + cos(a) * 25, y + sin(a) * 25)
+    g.stroke()
+    g.fillStyle = "rgba(255,190,60,.09)"
+    for row in range(10):
+        for col in range(int(SW / 45) + 3):
+            wx = col + int((rc * .15) // 45)
+            if hsh(wx, row) % 5 == 0:
+                x = off + col * 45 + (22.5 if row % 2 else 0)
+                y = 52 + row * 39
+                g.beginPath()
+                for i in range(6):
+                    a = PI / 3 * i + PI / 6
+                    (g.lineTo if i else g.moveTo)(x + cos(a) * 22, y + sin(a) * 22)
+                g.fill()
+    # light shafts
+    for i in range(3):
+        x = _wrap(i * 260 - rc * .25, SW + 300) - 150
+        gr = g.createLinearGradient(x, 64, x + 120, VH)
+        gr.addColorStop(0, "rgba(255,220,130,.13)"); gr.addColorStop(1, "rgba(255,220,130,0)")
+        g.fillStyle = gr; g.beginPath(); g.moveTo(x, 64); g.lineTo(x + 50, 64); g.lineTo(x + 170, VH); g.lineTo(x + 90, VH)
+        g.closePath(); g.fill()
+
+    # hanging comb clusters
+    def comb(ox):
+        for k, (dx, ln) in enumerate(((40, 70), (90, 110), (130, 60), (220, 90))):
+            x = ox + dx
+            g.fillStyle = OL; rr(x - 13, 50, 26, ln + 4, 12); g.fill()
+            g.fillStyle = "#b8781a"; rr(x - 11, 50, 22, ln, 10); g.fill()
+            g.fillStyle = "#d9952a"; g.fillRect(x - 7, 52, 4, ln - 14)
+            g.fillStyle = "#ffc93c"; g.beginPath(); g.arc(x + 3, 50 + ln - 4 + sin(tick * .05 + k) * 2, 3, 0, 7); g.fill()
+    tile_x(380, .35, comb)
+    for i in range(3):
+        t = tick * .012 + i * 2.1
+        bee(_wrap(i * 190 + t * 60 - rc * .5, SW + 80) - 40, 150 + i * 40 + sin(t * 3) * 22, tick * .9 + i)
+    for i in range(12):
+        x = _wrap(i * 97 + tick * .1 - rc * (.3 + (i % 3) * .1), SW)
+        y = 100 + (i * 53) % 200 + sin(tick * .03 + i) * 8
+        g.globalAlpha = .35 + .3 * sin(tick * .05 + i)
+        g.fillStyle = "#ffe08a"; g.beginPath(); g.arc(x, y, 1.6, 0, 7); g.fill()
+    g.globalAlpha = 1
+    atmos(.35, .45)
+
+
+def bg_frost():
+    tick, rc = S.tick, round(S.cam)
+    _vgrad([(0, "#8ec5f2"), (.6, "#f6dcef"), (1, "#fff6fb")])
+    g.fillStyle = "rgba(255,255,255,.6)"; g.beginPath(); g.arc(SW * .78, 70, 26, 0, 7); g.fill()
+    glow(SW * .78, 70, 20, 80, "255,255,255", .5)
+
+    def peaks(ox):
+        pts = [(0, 300), (70, 150), (120, 210), (190, 110), (260, 200), (320, 140), (400, 300)]
+        g.beginPath(); g.moveTo(ox, VH)
+        for x, y in pts:
+            g.lineTo(ox + x, y)
+        g.lineTo(ox + 400, VH); g.closePath(); g.fillStyle = "#e7b8d6"; g.fill()
+        for (x, y) in pts[1:-1]:
+            if y < 220:
+                g.fillStyle = "#ffffff"
+                g.beginPath(); g.moveTo(ox + x, y); g.lineTo(ox + x - 22, y + 30)
+                for k in range(4):
+                    g.lineTo(ox + x - 22 + k * 15, y + 30 + (8 if k % 2 else 0))
+                g.lineTo(ox + x + 22, y + 30); g.closePath(); g.fill()
+        g.fillStyle = "#e2364f"; g.beginPath(); g.arc(ox + 190, 104, 7, 0, 7); g.fill()
+        g.strokeStyle = "#2f7a32"; g.lineWidth = 2; g.beginPath(); g.moveTo(ox + 190, 98)
+        g.quadraticCurveTo(ox + 194, 88, ox + 200, 86); g.stroke()
+    tile_x(400, .06, peaks)
+    for i in range(4):
+        x = _wrap(i * 300 - S.cam * .1 + tick * .08, 1200) - 150
+        cloud(x, 60 + (i * 31) % 50, .7 + (i % 2) * .3)
+    hill(.22, 270, 12, .008, "#f9e3ee", "#ffffff")
+    pines = [[50, .8], [190, 1], [300, .7], [430, .9]]
+
+    def snowy(ox):
+        for x0, s in pines:
+            x = ox + x0
+            y = hill_y(x, .38, 296, 14, .007) + 2
+            pine(x, y, s)
+            g.save(); g.translate(x, y); g.scale(s, s); g.fillStyle = "#ffffff"
+            for ty, wd in ((-46, 12), (-58, 9), (-68, 6)):
+                g.beginPath(); g.moveTo(0, ty - 2); g.lineTo(-wd, ty + 8); g.lineTo(wd, ty + 8); g.closePath(); g.fill()
+            g.restore()
+    tile_x(560, .38, snowy)
+    hill(.38, 296, 14, .007, "#fdf0f6", "#ffffff")
+    cols = ["#ff5d73", "#57a9ff", "#ffd84d", "#58b84c", "#ffffff", "#ffffff", "#ffffff"]
+    for i in range(36):
+        sp = .5 + (i % 4) * .25
+        x = _wrap(i * 53 + sin(tick * .02 + i) * 14 - rc * (.2 + (i % 3) * .15), SW)
+        y = _wrap(i * 71 + tick * sp, VH)
+        c = cols[i % len(cols)]
+        if c == "#ffffff":
+            g.fillStyle = "rgba(255,255,255,.9)"; g.beginPath(); g.arc(x, y, 1.6 + (i % 2), 0, 7); g.fill()
+        else:
+            g.save(); g.translate(x, y); g.rotate(tick * .05 + i); g.fillStyle = c; g.fillRect(-2.2, -.8, 4.4, 1.6); g.restore()
+
+
+def bg_fudge():
+    tick, rc = S.tick, round(S.cam)
+    _vgrad([(0, "#120a06"), (1, "#2e1a0e")])
+
+    def fall(ox):
+        x = ox + 120
+        g.fillStyle = "#3a2010"; g.fillRect(x - 26, 64, 52, 300)
+        g.fillStyle = "#4e2c16"
+        for k in range(8):
+            y = 64 + _wrap(k * 40 + tick * 2.2, 300)
+            g.fillRect(x - 22 + (k % 3) * 12, y, 6, 22)
+        glow(x, 330, 10, 60, "160,90,40", .25)
+    tile_x(700, .2, fall)
+
+    def rocks(ox):
+        g.fillStyle = "#1e120a"
+        g.beginPath(); g.moveTo(ox, 64)
+        for k in range(9):
+            g.lineTo(ox + k * 40 + 20, 64 + 40 + (k * 37) % 50); g.lineTo(ox + k * 40 + 40, 64)
+        g.closePath(); g.fill()
+        g.beginPath(); g.moveTo(ox, VH)
+        for k in range(9):
+            g.lineTo(ox + k * 40 + 20, VH - 50 - (k * 29) % 60); g.lineTo(ox + k * 40 + 40, VH)
+        g.closePath(); g.fill()
+    tile_x(360, .15, rocks)
+    for i in range(14):
+        x = _wrap(i * 113 - rc * .3, SW + 40) - 20
+        y = 110 + (i * 61) % 180
+        a = .4 + .5 * abs(sin(tick * .04 + i * 1.3))
+        g.globalAlpha = a; g.fillStyle = "#ff7ab0" if i % 2 else "#5fe0d0"
+        g.beginPath(); g.moveTo(x, y - 4); g.lineTo(x + 3, y); g.lineTo(x, y + 4); g.lineTo(x - 3, y); g.closePath(); g.fill()
+    g.globalAlpha = 1
+
+    def beam(ox):
+        x = ox + 60
+        for bx in (x, x + 150):
+            g.fillStyle = OL; g.fillRect(bx - 7, 64, 14, 260)
+            g.fillStyle = "#6b4326"; g.fillRect(bx - 5, 64, 10, 260)
+            g.fillStyle = "#8a5a34"; g.fillRect(bx - 5, 64, 3, 260)
+        g.fillStyle = OL; g.fillRect(x - 10, 76, 170, 14)
+        g.fillStyle = "#7a4e2c"; g.fillRect(x - 8, 78, 166, 10)
+        lantern(x + 75, 132)
+    tile_x(520, .5, beam)
+    atmos(.45, .6)
+
+
+def melon_hill(cx, base, r):
+    g.fillStyle = "#2f7a32"; g.beginPath(); g.arc(cx, base, r, PI, 0); g.fill()
+    g.fillStyle = "#e9f5d0"; g.beginPath(); g.arc(cx, base, r - 7, PI, 0); g.fill()
+    g.fillStyle = "#ff5a6a"; g.beginPath(); g.arc(cx, base, r - 12, PI, 0); g.fill()
+    g.fillStyle = "#3a1e2a"
+    for k in range(7):
+        a = PI + PI * (k + .5) / 7
+        g.beginPath(); g.ellipse(cx + cos(a) * (r - 30), base + sin(a) * (r - 30), 2, 3.4, a + PI / 2, 0, 7); g.fill()
+
+
+def bg_melon():
+    tick, rc = S.tick, round(S.cam)
+    _vgrad([(0, "#4a2f7a"), (.45, "#ff8a5c"), (.8, "#ffc46a"), (1, "#ffe1a0")])
+    sx, sy = SW * .55, 250
+    glow(sx, sy, 30, 140, "255,230,150", .55)
+    g.fillStyle = "#fff0b8"; g.beginPath(); g.arc(sx, sy, 34, 0, 7); g.fill()
+    tile_x(520, .1, lambda ox: (melon_hill(ox + 120, 330, 110), melon_hill(ox + 380, 330, 80)))
+
+    def palms(ox):
+        for x0, hgt, s in ((60, 170, 1), (250, 140, .8), (400, 190, 1.1)):
+            x = ox + x0
+            g.strokeStyle = "#4a2a50"; g.lineWidth = 7 * s; g.lineCap = "round"
+            g.beginPath(); g.moveTo(x, VH); g.quadraticCurveTo(x + 20 * s, VH - hgt * .6, x + 8 * s, VH - hgt); g.stroke()
+            g.fillStyle = "#4a2a50"
+            tx_, ty_ = x + 8 * s, VH - hgt
+            for k in range(6):
+                a = -PI + k * PI / 5 + sin(tick * .02 + k) * .05
+                g.beginPath(); g.moveTo(tx_, ty_)
+                g.quadraticCurveTo(tx_ + cos(a) * 30 * s, ty_ + sin(a) * 30 * s - 10, tx_ + cos(a) * 55 * s,
+                                   ty_ + sin(a) * 40 * s + 18)
+                g.quadraticCurveTo(tx_ + cos(a) * 30 * s, ty_ + sin(a) * 20 * s, tx_, ty_ + 4); g.fill()
+            g.lineCap = "butt"
+    tile_x(520, .3, palms)
+    for i in range(10):
+        x = _wrap(i * 89 + sin(tick * .01 + i) * 30 - rc * .45, SW)
+        y = 140 + (i * 47) % 160 + sin(tick * .03 + i * 2) * 10
+        a = .3 + .7 * max(0, sin(tick * .06 + i * 1.7))
+        glow(x, y, 1, 7, "255,240,120", a * .6)
+        g.globalAlpha = a; g.fillStyle = "#fff6a0"; g.beginPath(); g.arc(x, y, 1.6, 0, 7); g.fill()
+    g.globalAlpha = 1
+
+    def vines(ox):
+        for x0, ln in ((30, 60), (140, 90), (300, 50)):
+            x = ox + x0
+            g.strokeStyle = "#2f6a2a"; g.lineWidth = 2.4
+            g.beginPath(); g.moveTo(x, -4); g.quadraticCurveTo(x + 12 + sin(tick * .02 + x0) * 4, ln / 2, x, ln); g.stroke()
+            g.fillStyle = "#3fae4f"
+            for k in range(3):
+                yy = ln * (k + 1) / 4
+                g.beginPath(); g.ellipse(x + 6, yy, 5, 2.4, .5, 0, 7); g.fill()
+    tile_x(420, .7, vines)
+
+
+def bg_sky():
+    tick, rc = S.tick, round(S.cam)
+    _vgrad([(0, "#0e0b2e"), (.55, "#3a2a72"), (1, "#f0a0c8")])
+    for i in range(60):
+        x = _wrap(i * 137 - rc * .03, SW)
+        y = (i * 59) % 260
+        a = .3 + .7 * abs(sin(tick * .03 + i * 1.9))
+        g.globalAlpha = a; g.fillStyle = "#ffffff"
+        s = 1 + (i % 3) * .6
+        g.fillRect(x - s / 2, y - s / 2, s, s)
+    g.globalAlpha = 1
+    mx = SW * .2 - (rc * .02) % 40
+    glow(mx, 80, 20, 90, "255,240,220", .35)
+    g.fillStyle = "#fff4dc"; g.beginPath(); g.arc(mx, 80, 26, 0, 7); g.fill()
+    g.fillStyle = "#ead9b8"
+    for dx, dy, r in ((-8, -6, 5), (9, 4, 4), (-2, 12, 3)):
+        g.beginPath(); g.arc(mx + dx, 80 + dy, r, 0, 7); g.fill()
+    k = tick % 420
+    if k < 40:
+        sx, sy = SW * .9 - k * 9, 40 + k * 3
+        g.strokeStyle = "rgba(255,255,255,%.2f)" % (1 - k / 40); g.lineWidth = 2; g.lineCap = "round"
+        g.beginPath(); g.moveTo(sx, sy); g.lineTo(sx + 40, sy - 13); g.stroke(); g.lineCap = "butt"
+
+    def island(ox):
+        x, y = ox + 200, 200
+        g.fillStyle = "#5a4a9a"; g.beginPath(); g.moveTo(x - 50, y); g.quadraticCurveTo(x, y + 60, x + 50, y); g.fill()
+        for dx, c in ((-22, "#f3d2e6"), (0, "#fff0c8"), (22, "#c9a7ff")):
+            g.fillStyle = c; g.beginPath(); g.arc(x + dx, y - 4, 20, PI, 0); g.fill()
+        g.fillStyle = "#e2364f"; g.beginPath(); g.arc(x, y - 30, 6, 0, 7); g.fill()
+    tile_x(700, .08, island)
+
+    def bank(par, base, col, period, amp):
+        off = -((rc * par) % period)
+        g.fillStyle = col
+        g.beginPath(); g.moveTo(0, VH)
+        x = off - period
+        while x < SW + period:
+            for k in range(4):
+                g.arc(x + k * period / 4 + period / 8, base + sin(k * 1.7 + x * .01) * amp, period / 6, PI, 0)
+            x += period
+        g.lineTo(SW, VH); g.closePath(); g.fill()
+    bank(.15, 300, "rgba(201,167,255,.55)", 220, 10)
+    bank(.3, 330, "rgba(255,190,225,.7)", 260, 8)
 
 
 def background():
-    if S.TH == 0:
+    th = S.TH
+    if th == 0:
         bg_lawn()
-    elif S.TH == 1:
+    elif th == 1:
         bg_cellar()
-    else:
+    elif th == 2:
         bg_kitchen()
+    elif th == 3:
+        bg_honey()
+    elif th == 4:
+        bg_frost()
+    elif th == 5:
+        bg_fudge()
+    elif th == 6:
+        bg_melon()
+    else:
+        bg_sky()
 
 
 # ======================================================================= tiles
@@ -520,7 +863,20 @@ def blk(px, py, base, hi, lo, r):
     rr(px + 1, py + 1, T - 2, T - 2, r); g.strokeStyle = OL; g.lineWidth = 2; g.stroke()
 
 
+# per-theme ground: body colours and the dark wall colours
+GROUND_COL = {
+    3: (["#c98a1f", "#a86c12", "#7a4a08"], ["#5a3a10", "#46300c", "#2e1e06"]),
+    4: (["#eac28c", "#d4a46a", "#a87a44"], ["#5f78a8", "#4a5f8a", "#34456a"]),
+    5: (["#5e3720", "#47280f", "#331c0d"], ["#2a1a10", "#3a2416", "#140c06"]),
+    6: (["#6e4428", "#573420", "#3e2414"], ["#2f5a2a", "#244a20", "#173414"]),
+    7: (["#f4e8f6", "#dcc5e4", "#b99ccb"], ["#3b3566", "#2e2952", "#1f1b3a"]),
+}
+
+
 def draw_ground(v, px, py, tx, ty):
+    if S.TH in GROUND_COL:
+        draw_ground_themed(v, px, py, tx, ty)
+        return
     h = hsh(tx, ty)
     up, dn, lf, rt = gsolid(tx, ty - 1), gsolid(tx, ty + 1), gsolid(tx - 1, ty), gsolid(tx + 1, ty)
     if v == 6:
@@ -561,9 +917,344 @@ def draw_ground(v, px, py, tx, ty):
         g.fillRect(px, py + T - 2, T, 2)
 
 
+def _outline_edges(px, py, up, dn, lf, rt, ty):
+    g.fillStyle = OL
+    if not up:
+        g.fillRect(px, py, T, 2)
+    if not lf:
+        g.fillRect(px, py, 2, T)
+    if not rt:
+        g.fillRect(px + T - 2, py, 2, T)
+    if not dn and ty < H - 1:
+        g.fillRect(px, py + T - 2, T, 2)
+
+
+def _drips(px, py, y0, col, hi, h):
+    """Glossy drips hanging off a top layer (honey, icing, fudge)."""
+    g.fillStyle = col
+    for i, (dx, ln) in enumerate(((3 + h % 6, 4 + (h >> 4) % 5), (15 + (h >> 3) % 6, 3 + (h >> 7) % 6),
+                                   (25 + (h >> 5) % 4, 2 + (h >> 9) % 4))):
+        g.beginPath(); g.moveTo(px + dx - 3, py + y0); g.lineTo(px + dx + 3, py + y0)
+        g.lineTo(px + dx + 2, py + y0 + ln); g.arc(px + dx, py + y0 + ln, 2, 0, PI); g.closePath(); g.fill()
+        g.fillStyle = hi
+        g.fillRect(px + dx - 1.4, py + y0 + 1, 1, max(1, ln - 1))
+        g.fillStyle = col
+
+
+def draw_ground_themed(v, px, py, tx, ty):
+    h = hsh(tx, ty)
+    th = S.TH
+    up, dn, lf, rt = gsolid(tx, ty - 1), gsolid(tx, ty + 1), gsolid(tx - 1, ty), gsolid(tx + 1, ty)
+    body, dark = GROUND_COL[th]
+    c = dark if v == 6 else body
+    g.fillStyle = c[0]; g.fillRect(px, py, T, T)
+    if v == 6:
+        # dark walls: a quiet block pattern so they read as background rock
+        g.fillStyle = c[1]
+        g.fillRect(px, py + 15, T, 2)
+        g.fillRect(px + (8 if ty % 2 else 0), py + 2, 2, 13); g.fillRect(px + (24 if ty % 2 else 16), py + 17, 2, 15)
+        if th == 3:
+            _hex(px, py, c[1])
+        _outline_edges(px, py, up, dn, lf, rt, ty)
+        return
+    if ty > 10 or (up and gsolid(tx, ty - 2)):
+        g.fillStyle = "rgba(0,0,0,.14)"; g.fillRect(px, py, T, T)
+    if th == 3:  # honeycomb: wax cells, honey glaze on top
+        _hex(px, py, c[1])
+        if not up:
+            g.fillStyle = "#ffc93c"; g.fillRect(px, py, T, 9)
+            g.fillStyle = "#ffe58a"; g.fillRect(px, py + 2, T, 2)
+            _drips(px, py, 8, "#ffc93c", "#ffe58a", h)
+    elif th == 4:  # cake: sponge with cream and jam, thick icing on top
+        g.fillStyle = "#fff3e0"; g.fillRect(px, py + 17, T, 3)
+        g.fillStyle = "#e2546b"; g.fillRect(px, py + 20, T, 2)
+        g.fillStyle = c[1]
+        for p in ((6 + h % 8, 9 + (h >> 3) % 5), (20 + (h >> 5) % 8, 26 + (h >> 7) % 4)):
+            g.beginPath(); g.arc(px + p[0], py + p[1], 1.4, 0, 7); g.fill()
+        if not up:
+            g.fillStyle = "#ffffff"; g.fillRect(px, py, T, 9)
+            g.fillStyle = "#dce6f5"; g.fillRect(px, py + 7, T, 2)
+            _drips(px, py, 8, "#ffffff", "#dce6f5", h)
+            cols = ["#ff5d73", "#57a9ff", "#ffd84d", "#58b84c", "#ff8fc1"]
+            for i in range(3):
+                g.save(); g.translate(px + 5 + i * 10 + h % 4, py + 3 + (h >> (i + 2)) % 3); g.rotate((h >> i) % 3)
+                g.fillStyle = cols[(h >> (i * 3)) % 5]; g.fillRect(-2, -.7, 4, 1.4); g.restore()
+    elif th == 5:  # fudge: chocolate chunks, glossy fudge on top
+        g.fillStyle = c[1]
+        g.fillRect(px, py + 15, T, 2)
+        g.fillRect(px + (8 if ty % 2 else 0), py + 2, 2, 13); g.fillRect(px + (24 if ty % 2 else 16), py + 17, 2, 15)
+        g.fillStyle = "rgba(255,255,255,.08)"; g.fillRect(px + 2, py + 2, T - 4, 2)
+        if not up:
+            g.fillStyle = "#8a5230"; g.fillRect(px, py, T, 8)
+            g.fillStyle = "#b0764a"; g.fillRect(px, py + 2, T, 2)
+            _drips(px, py, 7, "#8a5230", "#b0764a", h)
+    elif th == 6:  # grove: rich soil with roots, jungle grass on top
+        g.strokeStyle = c[2]; g.lineWidth = 1.4; g.lineCap = "round"
+        g.beginPath(); g.moveTo(px + 4 + h % 10, py + 12); g.quadraticCurveTo(px + 12, py + 20 + h % 5, px + 8 + h % 14, py + 30)
+        g.stroke(); g.lineCap = "butt"
+        g.fillStyle = "#a8825e"
+        g.beginPath(); g.ellipse(px + 20 + (h >> 4) % 8, py + 22 + (h >> 6) % 6, 2.4, 1.6, 0, 0, 7); g.fill()
+        if not up:
+            g.fillStyle = "#2f8f3e"; g.fillRect(px, py, T, 10)
+            g.fillStyle = "#58c25e"; g.fillRect(px, py + 1, T, 3)
+            g.fillStyle = "#2f8f3e"
+            for i in range(4):
+                x = px + i * 8 + 1
+                g.beginPath(); g.moveTo(x, py + 9); g.lineTo(x + 7, py + 9); g.lineTo(x + 3 + (h >> i) % 3, py + 15)
+                g.closePath(); g.fill()
+            g.fillStyle = "#86e07a"
+            for i in range(3):
+                x = px + 4 + i * 11 + (h >> (i * 2)) % 4
+                g.beginPath(); g.moveTo(x, py + 1); g.lineTo(x - 2, py - 4); g.lineTo(x + 1.5, py + 1); g.fill()
+    elif th == 7:  # clouds: soft puffy shading, scalloped top
+        g.fillStyle = c[1]
+        g.beginPath(); g.ellipse(px + 16, py + T + 4, 20, 10, 0, 0, 7); g.fill()
+        g.fillStyle = "rgba(255,255,255,.7)"
+        g.beginPath(); g.arc(px + 8 + h % 12, py + 14 + (h >> 4) % 6, 3, 0, 7); g.fill()
+        if not up:
+            g.fillStyle = "#ffffff"
+            for i in range(3):
+                g.beginPath(); g.arc(px + 5 + i * 11, py + 6, 7, PI, 0); g.fill()
+            g.fillRect(px, py + 5, T, 4)
+    _outline_edges(px, py, up, dn, lf, rt, ty)
+    if not up and th == 7:
+        # scallops replace the straight top edge
+        g.fillStyle = c[0]; g.fillRect(px + 2, py, T - 4, 2)
+        g.strokeStyle = OL; g.lineWidth = 2
+        for i in range(3):
+            g.beginPath(); g.arc(px + 5 + i * 11, py + 6, 7, PI * 1.05, PI * 1.95); g.stroke()
+
+
+def _hex(px, py, col):
+    g.strokeStyle = col; g.lineWidth = 1.3
+    for cx, cy in ((8, 8), (24, 8), (16, 22), (0, 22), (32, 22)):
+        g.beginPath()
+        for i in range(7):
+            a = PI / 3 * i + PI / 6
+            x, y = px + cx + cos(a) * 7.5, py + cy + sin(a) * 7.5
+            (g.lineTo if i else g.moveTo)(x, y)
+        g.stroke()
+
+
+STONE = {  # base, highlight, shadow per theme for stone blocks
+    3: ("#e0a82e", "#ffd977", "#b27d16"), 4: ("#a8d8f0", "#e6f7ff", "#6fb3d6"), 5: ("#6e5a4e", "#9a8474", "#4a3a30"),
+    6: ("#9a6a3a", "#c9965e", "#6e4622"), 7: ("#b9a7ff", "#e2dbff", "#8a74e0"),
+}
+SPIKE_COL = {  # stick, shade, tip
+    4: ("#d6f1ff", "#8ec8e8", "#ffffff"), 7: ("#ff9ad5", "#c25a9a", "#ffe0f2"), 3: ("#3a2a12", "#1e1408", "#ffd84d"),
+}
+
+
+def draw_spikes(px, py, down, lf=False, rt=False):
+    stick, shade, tip = SPIKE_COL.get(S.TH, ("#e8c99a", "#c49a62", "#fff3d6"))
+    g.save()
+    if down:
+        g.translate(px + T / 2, py + T / 2); g.scale(1, -1); g.translate(-px - T / 2, -py - T / 2)
+    # the base strip runs unbroken along a row of spikes
+    x0 = px if lf else px + 1
+    x1 = px + T if rt else px + T - 1
+    g.fillStyle = OL; g.fillRect(x0, py + T - 5, x1 - x0, 5)
+    g.fillStyle = "#8a5a2b"; g.fillRect(x0 + (0 if lf else 1), py + T - 4, x1 - x0 - (0 if lf else 1) - (0 if rt else 1), 3)
+    g.lineJoin = "round"
+    for i, (x, hgt) in enumerate(((5.5, 20), (16, 25), (26.5, 20))):
+        bx, top = px + x, py + T - 4 - hgt
+        g.beginPath(); g.moveTo(bx - 3.6, py + T - 4); g.lineTo(bx - 2.4, top + 6); g.lineTo(bx, top)
+        g.lineTo(bx + 2.4, top + 6); g.lineTo(bx + 3.6, py + T - 4); g.closePath()
+        g.fillStyle = stick; g.fill()
+        g.save(); g.clip(); g.fillStyle = shade; g.fillRect(bx + .6, top, 4, hgt + 2)
+        g.fillStyle = tip; g.fillRect(bx - 4, top, 8, 5); g.restore()
+        g.strokeStyle = OL; g.lineWidth = 1.3; g.stroke()
+    g.restore()
+
+
+def draw_cracker(px, py, cracked):
+    blk(px, py, "#e8c07a", "#f7dca2", "#b8843e", 4)
+    g.fillStyle = "#a8742e"
+    for x, y in ((8, 9), (16, 9), (24, 9), (12, 18), (20, 18)):
+        g.beginPath(); g.arc(px + x, py + y, 1.4, 0, 7); g.fill()
+    g.fillStyle = "rgba(255,255,255,.35)"; g.fillRect(px + 4, py + 4, T - 10, 1.5)
+    if cracked:
+        g.strokeStyle = OL; g.lineWidth = 1.4; g.lineCap = "round"
+        g.beginPath(); g.moveTo(px + 15, py + 2); g.lineTo(px + 12, py + 11); g.lineTo(px + 17, py + 17)
+        g.lineTo(px + 13, py + 29); g.moveTo(px + 12, py + 11); g.lineTo(px + 4, py + 14)
+        g.moveTo(px + 17, py + 17); g.lineTo(px + 27, py + 21); g.stroke(); g.lineCap = "butt"
+
+
+def same(tx, ty, v):
+    return 0 <= tx < S.W and 0 <= ty < H and S.grid[ty][tx] == v
+
+
+def run_lengths(tx, ty, v):
+    """How far a structure of tile v runs horizontally and vertically through this tile."""
+    hl = 1
+    x = tx - 1
+    while same(x, ty, v):
+        hl += 1
+        x -= 1
+    x = tx + 1
+    while same(x, ty, v):
+        hl += 1
+        x += 1
+    vl = 1
+    y = ty - 1
+    while same(tx, y, v):
+        vl += 1
+        y -= 1
+    y = ty + 1
+    while same(tx, y, v):
+        vl += 1
+        y += 1
+    return hl, vl
+
+
+def joined_box(px, py, up, dn, lf, rt, r, top_drop=0.0):
+    """Edges of a tile that may continue into same-type neighbours: exposed sides are inset by 1px and
+    only corners where two exposed sides meet are rounded, so a run of tiles reads as one piece."""
+    x0 = px if lf else px + 1
+    x1 = px + T if rt else px + T - 1
+    y0 = (py if up else py + 1) + top_drop
+    y1 = py + T if dn else py + T - 1
+    rad = {k: (r if v else 0) for k, v in (("tl", not up and not lf), ("tr", not up and not rt),
+                                           ("br", not dn and not rt), ("bl", not dn and not lf))}
+    return x0, y0, x1, y1, rad
+
+
+def joined_path(x0, y0, x1, y1, rad):
+    g.beginPath()
+    g.moveTo(x0 + rad["tl"], y0)
+    g.lineTo(x1 - rad["tr"], y0)
+    if rad["tr"]:
+        g.arc(x1 - rad["tr"], y0 + rad["tr"], rad["tr"], -PI / 2, 0)
+    g.lineTo(x1, y1 - rad["br"])
+    if rad["br"]:
+        g.arc(x1 - rad["br"], y1 - rad["br"], rad["br"], 0, PI / 2)
+    g.lineTo(x0 + rad["bl"], y1)
+    if rad["bl"]:
+        g.arc(x0 + rad["bl"], y1 - rad["bl"], rad["bl"], PI / 2, PI)
+    g.lineTo(x0, y0 + rad["tl"])
+    if rad["tl"]:
+        g.arc(x0 + rad["tl"], y0 + rad["tl"], rad["tl"], PI, PI * 1.5)
+    g.closePath()
+
+
+def joined_outline(x0, y0, x1, y1, rad, up, dn, lf, rt):
+    """Stroke only the exposed sides (plus their rounded corners), never the seams between joined tiles."""
+    g.strokeStyle = OL; g.lineWidth = 2; g.lineCap = "butt"
+    if not up:
+        g.beginPath(); g.moveTo(x0 + rad["tl"], y0); g.lineTo(x1 - rad["tr"], y0); g.stroke()
+    if not dn:
+        g.beginPath(); g.moveTo(x0 + rad["bl"], y1); g.lineTo(x1 - rad["br"], y1); g.stroke()
+    if not lf:
+        g.beginPath(); g.moveTo(x0, y0 + rad["tl"]); g.lineTo(x0, y1 - rad["bl"]); g.stroke()
+    if not rt:
+        g.beginPath(); g.moveTo(x1, y0 + rad["tr"]); g.lineTo(x1, y1 - rad["br"]); g.stroke()
+    for key, cx, cy, a0 in (("tl", x0, y0, PI), ("tr", x1, y0, -PI / 2), ("br", x1, y1, 0), ("bl", x0, y1, PI / 2)):
+        r = rad[key]
+        if r:
+            ox = r if key in ("tl", "bl") else -r
+            oy = r if key in ("tl", "tr") else -r
+            g.beginPath(); g.arc(cx + ox, cy + oy, r, a0, a0 + PI / 2); g.stroke()
+
+
+def joined_block(px, py, tx, ty, v, base, hi, lo, r):
+    """A solid block that merges with same-type neighbours into one shaded structure."""
+    up, dn, lf, rt = same(tx, ty - 1, v), same(tx, ty + 1, v), same(tx - 1, ty, v), same(tx + 1, ty, v)
+    x0, y0, x1, y1, rad = joined_box(px, py, up, dn, lf, rt, r)
+    joined_path(x0, y0, x1, y1, rad); g.fillStyle = base; g.fill()
+    g.save(); g.clip()
+    g.fillStyle = lo
+    if not dn:
+        g.fillRect(px, py + T - 8, T, 8)
+    if not rt:
+        g.fillRect(px + T - 6, py, 6, T)
+    g.fillStyle = hi
+    if not up:
+        g.fillRect(px, py, T, 5)
+    if not lf:
+        g.fillRect(px, py, 4, T - (8 if not dn else 0))
+    g.restore()
+    joined_outline(x0, y0, x1, y1, rad, up, dn, lf, rt)
+    return up, dn, lf, rt
+
+
+def draw_jelly_tile(px, py, k=0.0, tx=-99, ty=-99):
+    """Jelly: neighbouring pads melt together into one wobbly slab; k (0-1) squashes it after a bounce."""
+    up, dn, lf, rt = same(tx, ty - 1, 9), same(tx, ty + 1, 9), same(tx - 1, ty, 9), same(tx + 1, ty, 9)
+    sq = sin(k * PI * 3) * k
+    drop = 0 if up else 2 + sq * 7
+    x0, y0, x1, y1, rad = joined_box(px, py, up, dn, lf, rt, 9, drop)
+    g.save()
+    joined_path(x0, y0 + 2, x1, y1 + (0 if dn else 1), rad); g.fillStyle = "#b8336e"; g.fill()
+    joined_path(x0, y0, x1, y1, rad); g.fillStyle = "#ff6fae"; g.fill()
+    g.clip()
+    if not dn:
+        g.fillStyle = "#e0478a"; g.fillRect(px, py + T * .64, T, T)
+    if not up:
+        g.fillStyle = "rgba(255,255,255,.45)"
+        g.fillRect(x0 + (3 if not lf else 0), y0 + 3, (x1 - x0) - (3 if not lf else 0) - (3 if not rt else 0), 4.5)
+    g.fillStyle = "rgba(255,255,255,.55)"
+    h = hsh(tx, ty)
+    for bx, by, r in ((6 + h % 14, 14 + (h >> 4) % 6, 2.2), (16 + (h >> 3) % 12, 20 + (h >> 7) % 5, 1.5)):
+        g.beginPath(); g.arc(px + bx, py + by, r, 0, 7); g.fill()
+    g.restore()
+    joined_outline(x0, y0, x1, y1, rad, up, dn, lf, rt)
+
+
 def draw_tile(v, px, py, tx, ty):
     if v in (1, 6):
         draw_ground(v, px, py, tx, ty)
+        return
+    if v in (8, 80):
+        draw_cracker(px, py, v == 80)
+        return
+    if v == 9:
+        draw_jelly_tile(px, py, 0, tx, ty)
+        return
+    if v in (10, 11):
+        draw_spikes(px, py, v == 11, same(tx - 1, ty, v), same(tx + 1, ty, v))
+        return
+    if v == 5 and S.TH in STONE:
+        base, hi, lo = STONE[S.TH]
+        up, dn, lf, rt = joined_block(px, py, tx, ty, 5, base, hi, lo, 4)
+        g.save(); g.rect(px, py, T, T); g.clip()
+        g.strokeStyle = lo; g.lineWidth = 1.4
+        if S.TH == 3:
+            _hex(px - 0, py - 0, lo)
+        elif S.TH in (4, 7):
+            # one glint per structure edge, not one per tile
+            if not up and not lf:
+                g.strokeStyle = "rgba(255,255,255,.75)"; g.lineWidth = 2
+                g.beginPath(); g.moveTo(px + 7, py + 20); g.lineTo(px + 18, py + 8); g.stroke()
+                g.beginPath(); g.moveTo(px + 11, py + 24); g.lineTo(px + 15, py + 20); g.stroke()
+            elif hsh(tx, ty) % 5 == 0:
+                g.strokeStyle = "rgba(255,255,255,.35)"; g.lineWidth = 1.4
+                g.beginPath(); g.moveTo(px + 9, py + 22); g.lineTo(px + 22, py + 9); g.stroke()
+        elif S.TH == 5 and hsh(tx, ty) % 3 == 0:
+            g.fillStyle = "#ff7ab0" if hsh(tx, ty) % 2 else "#5fe0d0"
+            g.beginPath(); g.moveTo(px + 12, py + 12); g.lineTo(px + 16, py + 8); g.lineTo(px + 20, py + 12)
+            g.lineTo(px + 16, py + 17); g.closePath(); g.fill(); g.strokeStyle = OL; g.lineWidth = 1; g.stroke()
+        elif S.TH == 6:
+            # wood: grain runs along the whole log; ring ends only where the log is cut
+            g.strokeStyle = lo; g.lineWidth = 1.2
+            hl, vl = run_lengths(tx, ty, 5)
+            vertical = vl > hl
+            if vertical:  # a trunk: grain runs up and down, rings only on the cut ends
+                for xx in (11, 20):
+                    g.beginPath(); g.moveTo(px + xx + hsh(tx, ty) % 3, py); g.lineTo(px + xx + hsh(tx, ty + 1) % 3, py + T)
+                    g.stroke()
+                for cut, cy in ((not up, py + 8), (not dn, py + T - 8)):
+                    if cut:
+                        g.beginPath(); g.ellipse(px + 16, cy, 9, 4, 0, 0, 7); g.stroke()
+                        g.beginPath(); g.ellipse(px + 16, cy, 4, 2, 0, 0, 7); g.stroke()
+            else:  # a beam: grain runs along it, rings only on the cut ends
+                for yy in (11, 20):
+                    g.beginPath(); g.moveTo(px, py + yy + (hsh(tx, ty) % 3)); g.lineTo(px + T, py + yy + (hsh(tx + 1, ty) % 3))
+                    g.stroke()
+                for cut, cx in ((not lf, px + 8), (not rt, px + T - 8)):
+                    if cut and vl <= 2:
+                        g.beginPath(); g.ellipse(cx, py + 16, 4, 8, 0, 0, 7); g.stroke()
+                        g.beginPath(); g.ellipse(cx, py + 16, 2, 4, 0, 0, 7); g.stroke()
+        g.restore()
         return
     h = hsh(tx, ty)
     if v == 2:
@@ -586,28 +1277,35 @@ def draw_tile(v, px, py, tx, ty):
             g.font = "bold 20px Arial"; g.textAlign = "center"; g.textBaseline = "middle"
             g.fillStyle = "#fff3b0"; g.fillText("?", px + 15, py + 16); g.fillStyle = "#9a6408"; g.fillText("?", px + 16, py + 17)
     elif v == 5:
-        blk(px, py, "#4f8794", "#86b9c4", "#2f5560", 3)
-        g.strokeStyle = "#2f5560"; g.lineWidth = 1.3; g.beginPath(); g.moveTo(px + 8 + h % 8, py + 5)
-        g.lineTo(px + 12 + h % 8, py + 13); g.lineTo(px + 9 + h % 8, py + 20); g.stroke()
+        up, dn, lf, rt = joined_block(px, py, tx, ty, 5, "#4f8794", "#86b9c4", "#2f5560", 4)
+        g.save(); g.rect(px, py, T, T); g.clip()
+        if h % 3 == 0:
+            g.strokeStyle = "#2f5560"; g.lineWidth = 1.3; g.beginPath(); g.moveTo(px + 8 + h % 8, py + 5)
+            g.lineTo(px + 12 + h % 8, py + 13); g.lineTo(px + 9 + h % 8, py + 20); g.stroke()
         g.fillStyle = OL
-        for a in [[5, 5], [T - 6, 5], [5, T - 6], [T - 6, T - 6]]:
-            g.beginPath(); g.arc(px + a[0], py + a[1], 1.3, 0, 7); g.fill()
+        # rivets only on the structure's outer corners
+        for (ax, ay), show in (((5, 5), not up and not lf), ((T - 6, 5), not up and not rt),
+                               ((5, T - 6), not dn and not lf), ((T - 6, T - 6), not dn and not rt)):
+            if show:
+                g.beginPath(); g.arc(px + ax, py + ay, 1.3, 0, 7); g.fill()
+        g.restore()
 
 
 _tiles = {}
-_tiles_rs = None
 
 
-def tile_img(v, tx, ty):
-    """Tiles never change once drawn, so each one is rendered once and reused."""
-    global g, _tiles_rs
-    if _tiles_rs != RS or len(_tiles) > 3000:
+def tile_img(v, tx, ty, scale=None):
+    """Tiles never change once drawn, so each one is rendered once (per zoom level) and reused."""
+    global g
+    sc = scale or RS * VIEW_K
+    if len(_tiles) > 4000:
         _tiles.clear()
-        _tiles_rs = RS
-    key = (v, S.TH, tx, ty, gsolid(tx, ty - 1), gsolid(tx, ty + 1), gsolid(tx - 1, ty), gsolid(tx + 1, ty))
+    nb = tuple(S.grid[y][x] if 0 <= x < S.W and 0 <= y < H else -1
+               for x, y in ((tx, ty - 1), (tx, ty + 1), (tx - 1, ty), (tx + 1, ty)))
+    key = (sc, v, S.TH, tx, ty, nb, run_lengths(tx, ty, v) if (v == 5 and S.TH == 6) else None)
     img = _tiles.get(key)
     if img is None:
-        surf, cv = offscreen(T * RS + 2, T * RS + 2, RS)
+        surf, cv = offscreen(T * sc + 2, T * sc + 2, sc)
         saved, g = g, cv
         try:
             draw_tile(v, 0, 0, tx, ty)
@@ -618,11 +1316,16 @@ def tile_img(v, tx, ty):
     return img
 
 
+LIQUID = {2: ("#e8552b", "#ffb347"), 3: ("#e89a14", "#ffd45a"), 5: ("#5a2f16", "#8a5230")}
+
+
 def soup():
-    g.fillStyle = "#e8552b"; g.fillRect(round(S.cam) - 2, 10 * T + 8, VW + 4, 2 * T)
-    g.fillStyle = "#ffb347"
+    """The liquid in the pits: soup in the kitchen, honey in the hollow, fudge in the mines."""
+    base, bub = LIQUID[S.TH]
+    g.fillStyle = base; g.fillRect(round(S.cam) - 2, 10 * T + 8, SW + 4, 2 * T)
+    g.fillStyle = bub
     for i in range(10):
-        x = S.cam + ((i * 61 + S.tick * .6) % VW)
+        x = S.cam + ((i * 61 + S.tick * .6) % SW)
         y = 10 * T + 10 + sin(S.tick * .1 + i) * 3
         g.beginPath(); g.arc(x, y, 4 + (i % 3), 0, 7); g.fill()
 
@@ -874,7 +1577,7 @@ def draw_nut(e):
 
 
 def draw_enemy(e):
-    if e.dead > 30 or e.x < S.cam - 40 or e.x > S.cam + VW + 40:
+    if e.dead > 30 or e.x < S.cam - 40 or e.x > S.cam + SW + 40:
         return
     rt = e.rot and abs(e.rot) > .01
     if rt:
@@ -1239,6 +1942,12 @@ def draw_player():
     ws = P.ws if (P.ws and not P.ground and st == "play" and not rl) else 0
     wjf = P.wjf > 0 and st == "play" and not rl
     lean = -ws * .07 if ws else (0 if (P.duck or rl) else max(-.12, min(.12, P.vx * (.03 if P.ground else .02))))
+    throw_a, cradle = sprout_throw(P, f)
+    if P.throw > 0:
+        # the body braces a little while the sprout does the throwing
+        k = P.throw / THROW_T
+        sy *= 1 - .06 * sin(k * PI)
+        sx *= 1 + .05 * sin(k * PI)
     zoom = mv and abs(P.vx) >= 4.8 and st != "dead"
     ouch = st == "dead" or P.inv > 52
     sk = ohs_of(P)
@@ -1429,12 +2138,35 @@ def draw_player():
     g.lineCap = "butt"
     g.save(); g.translate(0, -3.5)
     swy = -f * 2 if P.ohd > 0 else max(-2, min(2, sin(tick * .07) * 1.2 - P.vx * .35 + (.6 if P.vy < -1 else (-.6 if P.vy > 3 else 0))))
-    sprout(P.fire, swy, (P.gla or 0, P.gls) if (P.gls or 0) > .04 else None)
+    if throw_a:
+        # the sprout is the throwing arm: it pivots at its base
+        g.save(); g.translate(0, -26); g.rotate(throw_a); g.translate(0, 26)
+    sprout(P.fire, swy, (P.gla or 0, P.gls) if (P.gls or 0) > .04 and not throw_a else None)
+    if cradle:
+        # a fire cookie cradled in the leaves, growing hotter as the sprout winds up
+        glow(f * 3, -38, 1, 10 * cradle + 4, "255,150,40", .7 * cradle)
+        flame(f * 3, -42, .5 * cradle, 0, .9, 1.4)
+        cookie_art(f * 3, -38, 2.5 + 2.4 * cradle)
+    if throw_a:
+        g.restore()
     if PAL["fem"]:
         draw_bow(-7.4, -22.4)
     g.restore()
     g.restore()
     g.restore()
+
+
+def sprout_throw(P, f):
+    """Sprout angle and how 'loaded' the cradled cookie is during a fire cookie throw."""
+    if not P.throw > 0:
+        return 0, 0
+    k = 1 - P.throw / THROW_T  # 0 -> 1 over the throw
+    rel = 1 - THROW_RELEASE / THROW_T  # moment the cookie leaves the leaves
+    if k < rel:
+        w = k / rel
+        return -f * .85 * (1 - (1 - w) ** 2), w  # curl back, cookie heating up
+    w = (k - rel) / (1 - rel)
+    return f * 1.05 * math.exp(-w * 3.2) * math.cos(w * 7.5), 0  # whip forward, then wobble to rest
 
 
 def draw_as(p, pal):
@@ -1802,6 +2534,91 @@ def iris(cx, cy, r):
     g.save(); g.fillStyle = "#000"; g.beginPath(); g.rect(0, 0, VW, VH); g.arc(cx, cy, max(1, r), 0, PI * 2, True); g.fill("evenodd"); g.restore()
 
 
+def ember_col(k):
+    """Heat colour for an ember: white-hot when fresh, cooling to red."""
+    if k > .7:
+        return "#fff3b0"
+    if k > .45:
+        return "#ffc23a"
+    if k > .25:
+        return "#ff7a1f"
+    return "#c8321a"
+
+
+def draw_fire_cookie(s):
+    """The fire cookie: a spinning, cracking cookie riding a comet of flame."""
+    cx, cy = s.x + 5, s.y + 5
+    tr = s.trail or [(cx, cy)]
+    n = len(tr)
+    for layer, (col, scale, alpha) in enumerate((("255,70,20", 1.7, .22), ("255,150,40", 1.0, .5),
+                                                 ("255,240,170", .45, .85))):
+        for i, (x, y) in enumerate(tr):
+            k = (i + 1) / n
+            wob = sin(S.tick * .7 + i * 1.3) * (1 - k) * 2
+            g.fillStyle = f"rgba({col},{alpha * k:.3f})"
+            g.beginPath(); g.arc(x, y + wob, (1.5 + 6.5 * k) * scale, 0, 7); g.fill()
+    glow(cx, cy, 3, 24 + sin(S.tick * .6) * 3, "255,140,40", .5)
+    ang = math.atan2(-(s.vy or 0), -(s.vx or 1)) + PI / 2
+    for i, (off, sc) in enumerate(((0, 1.1), (-.5, .75), (.5, .75))):
+        fl = 1 + sin(S.tick * .9 + i * 2) * .15
+        flame(cx, cy, sc * fl, ang + off * .6, .95, 1.6)
+    g.save(); g.translate(cx, cy); g.rotate(s.rot or 0)
+    cookie_art(0, 0, 6.4)
+    pulse = .55 + .45 * sin(S.tick * .5)
+    g.strokeStyle = f"rgba(255,170,40,{pulse:.2f})"; g.lineWidth = 1.2; g.lineCap = "round"
+    g.beginPath(); g.moveTo(-4, -1); g.lineTo(-1, 1); g.lineTo(2, -2); g.lineTo(4.5, 0)
+    g.moveTo(-1, 1); g.lineTo(0, 4); g.stroke(); g.lineCap = "butt"
+    g.restore()
+    g.strokeStyle = "rgba(255,200,90,.6)"; g.lineWidth = 1.2; g.beginPath(); g.arc(cx, cy, 8.2, 0, 7); g.stroke()
+
+
+def draw_fire_fx(f):
+    k = f.k
+    if k == "ember":
+        life0 = f.life0 or f.life
+        if not f.life0:
+            f.life0 = f.life
+        q = max(0, f.life / life0)
+        g.globalAlpha = min(1, q * 1.4)
+        col = ember_col(q)
+        r = (f.r or 1.5) * (.5 + q * .7)
+        g.fillStyle = "rgba(255,120,30,.25)"; g.beginPath(); g.arc(f.x, f.y, r * 2.4, 0, 7); g.fill()
+        g.fillStyle = col; g.beginPath(); g.arc(f.x, f.y, r, 0, 7); g.fill()
+    elif k == "fireburst":
+        q = 1 - f.life / 12
+        g.globalAlpha = 1 - q
+        if q < .35:
+            glow(f.x, f.y, 2, 22, "255,240,190", .9 * (1 - q * 2))
+        g.strokeStyle = "#ffb43a"; g.lineWidth = 3.2 * (1 - q) + .5
+        a0 = 0 if f.d > 0 else PI
+        g.beginPath(); g.arc(f.x, f.y, 4 + q * 16, a0 - 1.1, a0 + 1.1); g.stroke()
+        g.strokeStyle = "#ffe8a0"; g.lineWidth = 1.6 * (1 - q) + .3
+        g.beginPath(); g.arc(f.x - f.d * 3, f.y, 2 + q * 10, a0 - .8, a0 + .8); g.stroke()
+    elif k == "blast":
+        q = 1 - f.life / 16
+        g.globalAlpha = 1 - q
+        if q < .4:
+            g.fillStyle = f"rgba(255,240,180,{.8 * (1 - q * 2.5):.2f})"
+            g.beginPath(); g.arc(f.x, f.y, 5 + q * 22, 0, 7); g.fill()
+        g.strokeStyle = "#ff9a2a"; g.lineWidth = 4 * (1 - q) + .5
+        g.beginPath(); g.arc(f.x, f.y, 6 + q * 22, 0, 7); g.stroke()
+        g.strokeStyle = "#ffe08a"; g.lineWidth = 1.6; g.lineCap = "round"
+        for i in range(6):
+            a = i * PI / 3 + .3
+            r0, r1 = 8 + q * 18, 12 + q * 26
+            g.beginPath(); g.moveTo(f.x + cos(a) * r0, f.y + sin(a) * r0); g.lineTo(f.x + cos(a) * r1, f.y + sin(a) * r1)
+            g.stroke()
+        g.lineCap = "butt"
+    elif k == "sizzle":
+        q = 1 - f.life / 10
+        g.globalAlpha = (1 - q) * .8
+        g.strokeStyle = "#ffffff"; g.lineWidth = 1.2; g.lineCap = "round"
+        for d in (-1, 1):
+            g.beginPath(); g.moveTo(f.x + d * 3, f.y - 2 - q * 6)
+            g.quadraticCurveTo(f.x + d * 6, f.y - 6 - q * 8, f.x + d * 3, f.y - 10 - q * 10); g.stroke()
+        g.lineCap = "butt"
+
+
 def draw_fx():
     g.textBaseline = "alphabetic"
     for f in S.fx:
@@ -1844,22 +2661,24 @@ def draw_fx():
             g.globalAlpha = min(1, f.life / 10)
             w = abs(cos(f.life * .5)) * 7 + 1
             g.fillStyle = "#ffd84d"; g.beginPath(); g.ellipse(f.x, f.y, w, 9, 0, 0, 7); g.fill()
+        elif k in ("ember", "fireburst", "blast", "sizzle"):
+            draw_fire_fx(f)
         g.globalAlpha = 1
 
 
 def draw_world(hide_free=False):
     """Background plus everything in the level, in world space."""
     tick, cam = S.tick, S.cam
-    g.setTransform(RS, 0, 0, RS, 0, 0)
+    g.setTransform(RS * VIEW_K, 0, 0, RS * VIEW_K, 0, VIEW_Y * RS)
     background()
     g.save()
     shk = S.shk
     g.translate(-round(cam) + ((rnd() - .5) * shk * .9 if shk > 0 else 0),
                 ((rnd() - .5) * shk * .9 if shk > 0 else 0) + (40 if S.state == "title" else 0))
-    if S.TH == 2:
+    if S.TH in LIQUID:
         soup()
     x0 = math.floor(cam / T)
-    x1 = min(S.W - 1, x0 + 17)
+    x1 = min(S.W - 1, x0 + int(SW / T) + 1)
     grid, bumps = S.grid, S.bumps
     for ty in range(H):
         rowv = grid[ty]
@@ -1871,13 +2690,21 @@ def draw_world(hide_free=False):
             b = bumps.get((tx, ty))
             if b:
                 py -= b if b > 4 else 8 - b
+            if v == 8 and S.crumble.get((tx, ty), 0) > 0:
+                t = S.crumble[(tx, ty)]
+                k = t / 26
+                g.drawImageAt(tile_img(80 if t > 12 else 8, tx, ty), tx * T + sin(t * 2.3) * 1.8 * k, py + k * 2)
+                continue
+            if v == 9 and (tx, ty) in S.jelly:
+                draw_jelly_tile(tx * T, py, S.jelly[(tx, ty)] / 18, tx, ty)
+                continue
             g.drawImageAt(tile_img(v, tx, ty), tx * T, py)
     for k in list(bumps):
         bumps[k] -= 1
         if bumps[k] <= 0:
             del bumps[k]
     for c in S.coins:
-        if c.got or c.x < cam - 20 or c.x > cam + VW + 20:
+        if c.got or c.x < cam - 20 or c.x > cam + SW + 20:
             continue
         w = abs(cos(tick * .08 + c.x)) * 6 + 2
         y = c.y + sin(tick * .06 + c.x) * 2
@@ -1889,22 +2716,21 @@ def draw_world(hide_free=False):
         cx, cy = it.x + 11, it.y + 11
         pl = 1 + sin(tick * .12) * .12
         glow(cx, cy, 3, 26 * pl, "255,240,150", .55)
-        (pizza_art if it.t == "pizza" else cookie_art)(cx, cy, 11)
-    if S.GOAL < 900 and cam - 120 < S.GOAL * T < cam + VW + 120:
+        pizza_art(cx, cy + 1, 13) if it.t == "pizza" else cookie_art(cx, cy, 11)
+    if S.GOAL < 900 and cam - 120 < S.GOAL * T < cam + SW + 120:
         draw_goal(S.GOAL * T)
     GS = S.GS
-    if GS and cam - 120 < GS.pic < cam + VW + 120:
-        (draw_feast if S.LV == 1 else draw_picnic)(GS.pic)
+    if GS and cam - 120 < GS.pic < cam + SW + 120:
+        (draw_feast if S.TH in (1, 5) and not S.CUST else draw_picnic)(GS.pic)
         draw_as(GS.P2, PINKPAL)
-    if S.CAGE and cam - 100 < S.CAGE.cx < cam + VW + 100:
+    if S.CAGE and cam - 100 < S.CAGE.cx < cam + SW + 100:
         draw_cage()
     for e in S.enemies:
         if hide_free and e.free:
             continue
         draw_enemy(e)
     for s in S.shots:
-        g.fillStyle = "rgba(255,140,30,.8)"; g.beginPath(); g.ellipse(s.x + 5 - s.vx * 1.2, s.y + 5, 7, 4, 0, 0, 7); g.fill()
-        cookie_art(s.x + 5, s.y + 5, 5)
+        draw_fire_cookie(s)
     B = S.boss
     if B and (not B.dead or ((tick >> 2) % 2 and (not S.CAGE or S.bossT < 56))):
         draw_boss()
@@ -1983,6 +2809,17 @@ def draw_card():
     g.font = "40px 'Bagel Fat One'"; g.lineWidth = 6; g.strokeStyle = OL; g.lineJoin = "round"
     g.strokeText(C.name, VW / 2, 136 - 22 + sl); g.fillStyle = "#ffd84d"; g.fillText(C.name, VW / 2, 136 - 22 + sl)
     g.fillStyle = "#e8452f"; g.fillRect(VW / 2 - 70, 170, 140, 3)
+    if C.check:
+        # checkpoint stage: a little pennant on each side of the label
+        y = 196
+        for d in (-1, 1):
+            px = VW / 2 + d * 70
+            g.fillStyle = "#d9a25b"; g.fillRect(px - 1, y - 12, 2.4, 20)
+            g.beginPath(); g.moveTo(px + 1, y - 12); g.lineTo(px + 1 + d * 12, y - 8); g.lineTo(px + 1, y - 4)
+            g.closePath(); g.fillStyle = "#8fdc63"; g.fill()
+        g.font = "800 12px Sniglet"; g.letterSpacing = 3; g.fillStyle = "#8fdc63"
+        g.fillText("CHECKPOINT", VW / 2, y - 2)
+        g.letterSpacing = 0
     bob = abs(sin(t * .16)) * 5
     fy = 262
     sv, scam = S.P, S.cam
@@ -2022,7 +2859,7 @@ def hud():
     t("SCORE " + str(S.score).zfill(6), VW / 2, "center", 10)
     t("LIVES " + str(max(0, S.lives)), VW - 12, "right", 10)
     t("TIME " + str(max(0, math.ceil(S.time))), VW - 12, "right", 28)
-    t(NAMES[S.CI], 12, "left", 30, 11)
+    t(level_name(), 12, "left", 30, 11)
     if P and S.state in ("play", "dead"):
         lkd = P.ohd > 0
         h = P.ohd / OHD if lkd else min(1, (P.glt or 0) / OHM)

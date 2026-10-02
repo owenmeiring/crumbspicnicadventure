@@ -6,10 +6,24 @@ Runs at a fixed 60 updates per second, like the original.
 import math
 import random
 
+from .levels import CHM, find_ledges, parse_level
+
 T, H, VW, VH = 32, 12, 512, 384
-NAMES = ["PICNIC LAWN", "CELLAR PANTRY", "HIGH PICNIC", "BOSS KITCHEN"]
+NAMES = ["PICNIC LAWN", "CELLAR PANTRY", "HIGH PICNIC", "HONEYCOMB HOLLOW", "FROSTED PEAKS", "FUDGE MINES",
+         "MELON GROVE", "SUNDAE SKIES", "BOSS KITCHEN"]
 CARDTXT = ["Run, hop and stomp to the picnic!", "Down in the dark pantry...",
-           "Sunshine, sky and a very high picnic", "The Grand Chili is waiting..."]
+           "Sunshine, sky and a very high picnic", "Sticky, sweet and full of stingers",
+           "Icing cliffs and a long way down", "Dig deep. Mind the drips.",
+           "Sunset in the treetops", "Above the clouds, under the stars", "The Grand Chili is waiting..."]
+TIMES = [260, 250, 250, 420, 450, 460, 480, 520, 300]
+LAST = len(NAMES) - 1
+CHECKPOINTS = (2, 5, 7)  # 1-3, 1-6 and 1-8: game over continues from the last one reached
+# theme -> music mood (0 lawn, 1 cellar, 2 boss, 3 bright adventure, 4 deep caves)
+MOOD = {0: 0, 1: 1, 2: 2, 3: 4, 4: 3, 5: 4, 6: 3, 7: 3}
+# tile codes: 1 ground, 2 brick, 3 ? block, 4 used block, 5 stone, 6 dark wall,
+# 8 crumbling cracker, 9 jelly pad, 10 spikes up, 11 spikes down
+CRUMBLE, JELLY, SPIKE_UP, SPIKE_DN = 8, 9, 10, 11
+CRUMBLE_T, CRUMBLE_BACK = 26, 170
 BASEPAL = dict(crust="#d9964a", shade="#a9642a", hi="#f3c27f", plate="#fbe3b0", ring="rgba(224,150,62,.5)",
                inner="#e8c98a", spk="rgba(200,130,50,.45)", pst="#b06f30", cheek="rgba(255,120,145,.8)",
                leg="#d9964a", shoe="#e8452f", shoe2="#b8301f", fem=0)
@@ -85,12 +99,18 @@ class State:
         self.HA = 0.0
         self.menu_rects = []
         self.paused = False
+        self.crumble = {}  # (x, y) -> frames since stepped on (>0) or frames until it grows back (<0)
+        self.jelly = {}  # (x, y) -> wobble timer
+        self.checkpoint = 0  # furthest checkpoint level reached (index)
+        self.CUST = None  # the custom level being played, if any
+        self.CUSTEDIT = False  # True when that play-test came from the level builder
 
 
 S = State()
 AUDIO = None          # crumb.audio.Audio, set by the app
 on_rumble = None      # callback(strength, ms) for gamepad rumble
 on_best = None        # callback when the best score changes
+on_checkpoint = None  # callback when a new checkpoint is reached
 
 
 # ------------------------------------------------------------------ sound
@@ -156,7 +176,7 @@ def dance_slot(mt):
 
 
 def mood_now():
-    return 0 if S.state == "title" else S.LV
+    return 0 if S.state in ("title", "edit") else S.LV
 
 
 # ------------------------------------------------------------------ effects
@@ -280,35 +300,6 @@ def level2():
     ant(93, 1); ant(96, -1); nut(99, 1); ant(102, 1); ant(112, -1); ant(116, 1)
 
 
-def level3():
-    mk(91)
-    S.GOAL, S.UG, S.TH = 999, True, 2
-    S.AR0, S.AR1 = 73, 88
-    S.LEDGES = [[77, 79], [83, 85]]
-    S.LMID = S.KX = 80.5
-    g = S.grid
-    row(0, 0, S.W - 1, 6); row(1, 0, S.W - 1, 6)
-    ground([[15, 17], [26, 28], [36, 38], [44, 46], [52, 55], [60, 63]])
-    row(7, 6, 10, 2); g[7][7] = 3; g[7][9] = 3; S.contents[(7, 7)] = "pizza"; S.contents[(9, 7)] = "cookie"
-    row(8, 14, 18, 2); g[8][16] = 3; S.contents[(16, 8)] = "cookie"
-    row(7, 30, 34, 2); g[7][32] = 3; S.contents[(32, 7)] = "pizza"
-    row(8, 40, 43, 2)
-    pillar(22, 3); pillar(48, 2); pillar(67, 3); row(7, 56, 59, 2); g[7][57] = 3; S.contents[(57, 7)] = "pizza"
-    row(7, 64, 66, 2); g[7][65] = 3; S.contents[(65, 7)] = "cookie"
-    row(7, 77, 78, 5); row(7, 83, 84, 5)
-    for y in range(2, 10):
-        g[y][89] = 6
-        g[y][90] = 6
-    for a in [(14, 6, 5), (19, 8, 3), (30, 5, 5), (40, 6, 4), (52, 6, 4), (60, 6, 4), (76, 6, 3), (83, 6, 3)]:
-        arc(*a)
-    ant(12, 1); nut(20, -1); ant(33, 1); nut(41, 1); ant(50, -1); ant(57, 1); nut(59, -1); ant(65, 1); nut(70, -1)
-    S.bossDisp = 6.0
-    S.boss = O(x=83 * T, y=10 * T - 64, w=56, h=64, vx=-1, vy=0, hp=6, dead=0, flash=0, cd=100)
-    S.CAGE = O(cx=87.4 * T, gy=10 * T, open=0, lock=1, lt=0,
-               q=O(x=0, y=0, w=22, h=28, vx=0, vy=0, ground=True, face=-1, big=False, fire=False, inv=0, duck=0,
-                   mk=0, mt=0, dx=6))
-
-
 CAMP3 = {"name": "level 3", "theme": 0, "time": 250, "w": 80, "start": [2, 9], "goal": 76, "grid": [
     "................................................................................",
     "...................................b?..............c...c........................",
@@ -322,7 +313,7 @@ CAMP3 = {"name": "level 3", "theme": 0, "time": 250, "w": 80, "start": [2, 9], "
     ".........##.......................b.......b.#..#................#...............",
     "###########..........#..#...#..#..##########....##############.............#####",
     "###########..........#..#...#..#..############################.............#####"],
-    "contents": {(24, 7): "pizza", (21, 7): "pizza", (31, 7): "cookie"},
+    "contents": {"24,7": "pizza", "21,7": "pizza", "31,7": "cookie"},
     "coins": [[14, 1], [15, 1], [16, 1], [16, 2], [16, 3], [15, 3], [14, 3], [14, 2], [27, 4], [28, 4], [29, 4], [29, 3],
               [28, 3], [27, 3], [27, 2], [28, 2], [29, 1], [28, 1], [27, 1], [29, 2], [51, 2], [51, 3], [51, 4], [55, 2],
               [55, 3], [55, 4], [49, 2], [49, 3], [49, 4], [53, 2], [53, 3], [53, 4], [57, 2], [57, 3], [57, 4], [37, 3],
@@ -330,32 +321,43 @@ CAMP3 = {"name": "level 3", "theme": 0, "time": 250, "w": 80, "start": [2, 9], "
     "enemies": [["ant", 19, 3, 1], ["ant", 15, 5, 1], ["nut", 36, 9, 1], ["nut", 37, 9, 1], ["nut", 38, 9, 1],
                 ["nut", 39, 9, 1], ["nut", 40, 9, 1], ["ant", 44, 10, 1], ["ant", 46, 10, 1], ["ant", 47, 10, 1],
                 ["ant", 45, 10, 1], ["nut", 52, 7, 1], ["nut", 55, 7, 1]]}
-CHM = {".": 0, "#": 1, "b": 2, "?": 3, "s": 5, "c": 6}
+CAMP3_L = parse_level(CAMP3)
+
+
+def mk_enemy(q):
+    if q["k"] == "ant":
+        return O(k="ant", x=q["x"] * T, y=(q["y"] + 1) * T - 20, w=26, h=20, vx=q["d"] * .7, dead=0)
+    return O(k="nut", x=q["x"] * T, y=(q["y"] + 1) * T - 26, w=26, h=26, vx=q["d"] * .6, dead=0, mode="walk", st=0,
+             kick=0)
 
 
 def build_live(L):
+    """Turn a parsed level (see levels.py) into the live world."""
     mk(L["w"])
     S.TH = L["theme"]
-    S.UG = S.TH > 0
-    S.LV = S.TH
-    S.GOAL = L["goal"]
+    S.LV = MOOD.get(S.TH, 0)
+    S.GOAL = 99999 if L["goal"] is None else L["goal"]
     for y in range(H):
         for x in range(L["w"]):
-            S.grid[y][x] = CHM[L["grid"][y][x]]
+            S.grid[y][x] = CHM[L["g"][y][x]]
+    S.UG = any(v == 6 for v in S.grid[0])
     S.contents.update(L["contents"])
     for c in L["coins"]:
         S.coins.append(O(x=c[0] * T + 16, y=c[1] * T + 16, got=False))
-    for k, x, y, d in L["enemies"]:
-        if k == "ant":
-            S.enemies.append(O(k="ant", x=x * T, y=(y + 1) * T - 20, w=26, h=20, vx=d * .7, dead=0))
-        else:
-            S.enemies.append(O(k="nut", x=x * T, y=(y + 1) * T - 26, w=26, h=26, vx=d * .6, dead=0, mode="walk",
-                               st=0, kick=0))
+    for q in L["enemies"]:
+        S.enemies.append(mk_enemy(q))
     S.LEDGES = [[77, 79], [83, 85]]
     S.LMID = 80.5
     S.KX = L["w"] / 2
     S.bossDisp = 6.0
     S.boss = None
+    b = L["boss"]
+    if b:
+        S.AR0, S.AR1 = b["ar0"], b["ar1"]
+        S.KX = (S.AR0 + S.AR1 + 1) / 2
+        S.LEDGES = find_ledges(L)
+        S.LMID = (lcx(0) + lcx(1)) / 2 / T if len(S.LEDGES) >= 2 else S.KX
+        S.boss = O(x=b["x"] * T, y=10 * T - 64, w=56, h=64, vx=-1, vy=0, hp=6, dead=0, flash=0, cd=100)
     _find_qblocks()
 
 
@@ -363,23 +365,74 @@ def _find_qblocks():
     S.qblocks = [(x, y) for y in range(H) for x in range(S.W) if S.grid[y][x] == 3]
 
 
-def load_level(n):
-    S.CI = n
-    if n == 3:
+def place_start(L):
+    P = S.P
+    P.x = L["start"][0] * T + (T - P.w) / 2
+    P.y = (L["start"][1] + 1) * T - P.h - .01
+
+
+def play_custom(L, from_editor=False):
+    """Play a custom level (from the level builder or the Custom Levels list)."""
+    S.CUST = L
+    S.CUSTEDIT = from_editor
+    note_best()
+    S.lives, S.score, S.coinsN = 3, 0, 0
+    S.paused = False
+    build_live(L)
+    if L["theme"] == 2:
         clock().intro_pend = True
-    if n == 2:
-        build_live(CAMP3)
-        S.CUSTTIME = CAMP3["time"]
-        return
-    S.LV = 2 if n == 3 else n
-    [level1, level2, None, level3][n]()
+    new_player(False)
+    S.deadT = S.clearT = 0
+    S.keys = {}
+    show_card()
+
+
+def load_level(n):
+    from . import world
+    S.CI = n
+    S.CUST = None
+    S.crumble, S.jelly = {}, {}
+    if n in CHECKPOINTS and n > S.checkpoint:
+        S.checkpoint = n
+        if on_checkpoint:
+            on_checkpoint()
+    if n == 0:
+        level1()
+    elif n == 1:
+        level2()
+    elif n == 2:
+        build_live(CAMP3_L)
+    else:
+        L = world.LEVELS[n]
+        build_live(L)
+        if n == LAST:
+            clock().intro_pend = True
+            cx = (L["boss"]["ar1"] - .6) * T
+            S.CAGE = O(cx=cx, gy=10 * T, open=0, lock=1, lt=0,
+                       q=O(x=0, y=0, w=22, h=28, vx=0, vy=0, ground=True, face=-1, big=False, fire=False, inv=0,
+                           duck=0, mk=0, mt=0, dx=6))
+    S.LV = MOOD.get(S.TH, 0)
     _find_qblocks()
+
+
+def continue_game():
+    """After a game over: back to the last checkpoint with fresh lives."""
+    S.CUST = None
+    S.CUSTEDIT = False
+    S.lives, S.score, S.coinsN = 3, 0, 0
+    S.paused = False
+    load_level(S.checkpoint)
+    new_player(False)
+    show_card()
 
 
 def respawn_blocks():
     for x, y in S.qblocks:
         S.grid[y][x] = 3
         S.bumps.pop((x, y), None)
+    for (x, y) in list(S.crumble):
+        S.grid[y][x] = CRUMBLE
+    S.crumble = {}
     S.items = []
 
 
@@ -391,7 +444,13 @@ def new_player(keep):
     S.P = O(x=64, y=232 if b else 250, w=28 if b else 22, h=42 if b else 28, vx=0, vy=0, ground=False, face=1,
             big=bool(b), fire=bool(f), inv=0, duck=0)
     S.cam = 0
-    S.time = [260, 250, S.CUSTTIME, 230][S.CI]
+    if S.CUST:
+        place_start(S.CUST)
+        S.time = S.CUST["time"]
+        S.cam = max(0, min(S.W * T - VW, S.P.x - VW / 2.4))
+    else:
+        S.time = TIMES[S.CI]
+    S.P.safe = (S.P.x, S.P.y + S.P.h)
 
 
 def grow():
@@ -604,11 +663,20 @@ def note_best():
 
 
 def show_card():
-    S.CARD = O(t=0, len=126, name=NAMES[S.CI], no="LEVEL " + str(S.CI + 1), sub=CARDTXT[S.CI])
+    if S.CUST:
+        S.CARD = O(t=0, len=110, name=S.CUST["name"].upper(), no="CUSTOM LEVEL", sub="")
+    else:
+        S.CARD = O(t=0, len=126, name=NAMES[S.CI], no=f"WORLD 1-{S.CI + 1}", sub=CARDTXT[S.CI], check=S.CI in CHECKPOINTS)
     S.state = "card"
 
 
+def level_name():
+    return S.CUST["name"].upper() if S.CUST else f"1-{S.CI + 1}  {NAMES[S.CI]}"
+
+
 def start(level=0):
+    S.CUST = None
+    S.CUSTEDIT = False
     note_best()
     S.lives, S.score, S.coinsN = 3, 0, 0
     S.paused = False
@@ -618,6 +686,9 @@ def start(level=0):
 
 
 def restart_level():
+    if S.CUST:
+        play_custom(S.CUST, S.CUSTEDIT)
+        return
     load_level(S.CI)
     new_player(False)
     S.paused = False
@@ -796,9 +867,49 @@ def hurt():
 
 def fire():
     P = S.P
-    if S.state == "play" and P.fire and not P.roll > 0 and not gp_act() and len(S.shots) < 2:
-        S.shots.append(O(x=P.x + P.w if P.face > 0 else P.x - 10, y=P.y + P.h * .4, vx=P.face * 6.5, vy=0, life=110))
-        shoot()
+    if (S.state == "play" and P.fire and not P.roll > 0 and not gp_act() and not P.throw > 0
+            and len(S.shots) < 2):
+        # Crumb's fiery sprout curls back with a cookie cradled in its leaves, then whips forward
+        # and flings it (see throw_release); THROW_T frames in total
+        P.throw = THROW_T
+        snd(300, 520, .1, "triangle", .035)
+
+
+THROW_T, THROW_RELEASE = 14, 8
+
+
+def sprout_tip(P):
+    """Where the leaves of Crumb's sprout are, in world space."""
+    s = 1.5 if P.big else 1
+    return P.x + P.w / 2 + P.face * 7 * s, P.y + P.h - 36 * s
+
+
+def throw_release(P):
+    x, y = sprout_tip(P)
+    S.shots.append(O(x=x - 5, y=y - 5, vx=P.face * 6.4, vy=-3.4, life=110, rot=0.0, trail=[], age=0))
+    S.fx.append(O(k="fireburst", x=x, y=y, d=P.face, life=12))
+    for _ in range(8):
+        a = (rnd() - .5) * 1.2 - .4
+        sp = 1.5 + rnd() * 2.5
+        S.fx.append(O(k="ember", x=x, y=y, vx=P.face * math.cos(a) * sp, vy=math.sin(a) * sp - .4,
+                      life=12 + rnd() * 10, r=1.1 + rnd() * 1.4))
+    snd(220, 900, .16, "sawtooth", .045)
+    snd(1600, 500, .1, "triangle", .03)
+
+
+def cookie_blast(x, y):
+    """A fire cookie bursting into flames and crumbs."""
+    S.fx.append(O(k="blast", x=x, y=y, life=16))
+    for i in range(10):
+        a = rnd() * math.pi * 2
+        sp = 1.5 + rnd() * 3.5
+        S.fx.append(O(k="ember", x=x, y=y, vx=math.cos(a) * sp, vy=math.sin(a) * sp - 1, life=16 + rnd() * 14,
+                      r=1.4 + rnd() * 2))
+    for i in range(7):
+        S.fx.append(O(k="crumb", x=x, y=y, vx=(rnd() - .5) * 4, vy=-1.5 - rnd() * 2.5, life=26,
+                      c="#dc9c4c" if i % 2 else "#3a1e0e"))
+    snd(160, 50, .2, "sawtooth", .06)
+    snd(900, 260, .09, "square", .025)
 
 
 def solid(px, py):
@@ -807,7 +918,58 @@ def solid(px, py):
         return 1
     if ty < 0 or ty >= H or tx >= S.W:
         return 0
-    return S.grid[ty][tx]
+    v = S.grid[ty][tx]
+    return 0 if v >= SPIKE_UP else v
+
+
+def tile(tx, ty):
+    if 0 <= ty < H and 0 <= tx < S.W:
+        return S.grid[ty][tx]
+    return 0
+
+
+def spike_hit(P):
+    """Is Crumb touching the sharp half of any spike tile?"""
+    x0, x1 = math.floor((P.x + 3) / T), math.floor((P.x + P.w - 3) / T)
+    y0, y1 = math.floor((P.y + 2) / T), math.floor((P.y + P.h - 1) / T)
+    for ty in range(y0, y1 + 1):
+        for tx in range(x0, x1 + 1):
+            v = tile(tx, ty)
+            if v == SPIKE_UP and P.y + P.h > ty * T + 14:
+                return v
+            if v == SPIKE_DN and P.y < ty * T + 18:
+                return v
+    return 0
+
+
+def spike_hurt():
+    """Spikes always hurt (even mid-roll), then put Crumb back on the last safe ledge."""
+    P = S.P
+    gp_cancel()
+    P.roll = 0
+    if P.inv <= 0:
+        bonk()
+        S.shk = 6
+        if P.fire:
+            P.fire = False
+        elif P.big:
+            shrink()
+        else:
+            die()
+            return
+    for _ in range(8):
+        S.fx.append(O(k="puff", x=P.x + P.w / 2 + (rnd() - .5) * 16, y=P.y + P.h / 2 + (rnd() - .5) * 16,
+                      vx=(rnd() - .5) * 1.4, vy=-.4 - rnd(), life=26))
+    sx, foot = P.safe or (64, 278)
+    P.duck = 0
+    P.h = 42 if P.big else 28
+    P.x, P.y = sx, foot - P.h
+    P.vx = P.vy = 0
+    P.inv = 100
+    P.glt = 0
+    P.ohd = 0
+    S.fx.append(O(k="ring", x=P.x + P.w / 2, y=P.y + P.h / 2, life=16))
+    snd(700, 1100, .2, "sine", .06)
 
 
 def ov(a, b):
@@ -887,6 +1049,9 @@ def update():
             f.vy += .07
             f.r += f.vr
             f.vx *= .99
+        elif f.k == "ember":
+            f.vx *= .93
+            f.vy = f.vy * .93 - .06
     S.fx = [f for f in S.fx if f.life > 0]
     st = S.state
     if st == "title":
@@ -907,10 +1072,17 @@ def update():
         return
     if st == "clear":
         S.clearT += 1
-        if S.clearT > 46:
-            if S.CI == 3:
+        if S.CUST:
+            if S.clearT > 60:
                 S.state = "win"
                 note_best()
+        elif S.clearT > 46:
+            if S.CI == LAST:
+                S.state = "win"
+                note_best()
+                S.checkpoint = 0  # world cleared: the next run starts fresh
+                if on_checkpoint:
+                    on_checkpoint()
             else:
                 load_level(S.CI + 1)
                 new_player(True)
@@ -934,8 +1106,84 @@ def update():
     play_update()
 
 
+def stand_effects(P):
+    """What Crumb is standing on: jelly bounces, crackers start to crumble, solid ground is remembered as safe."""
+    fy = math.floor((P.y + P.h + 1) / T)
+    under = [(tx, fy, tile(tx, fy)) for tx in {math.floor((P.x + 3) / T), math.floor((P.x + P.w - 3) / T)}]
+    jelly = [u for u in under if u[2] == JELLY]
+    if jelly:
+        tx, ty, _ = jelly[0]
+        pound = bool(P.gpf)
+        gp_cancel()
+        P.vy = -17 if pound else -14.2
+        P.ground = False
+        P.bnc = 1
+        P._sq = 1
+        # the whole slab of joined jelly wobbles together
+        x = tx
+        while tile(x - 1, ty) == JELLY:
+            x -= 1
+        while tile(x, ty) == JELLY:
+            S.jelly[(x, ty)] = 18
+            x += 1
+        snd(180, 520, .22, "sine", .09 if pound else .07)
+        snd(520, 900, .1, "triangle", .03)
+        for i in range(6):
+            S.fx.append(O(k="spark", x=tx * T + 4 + i * 5, y=ty * T, vx=(i - 2.5) * .6, vy=-1.5 - rnd(), life=16,
+                          c="#ff9ad5" if i % 2 else "#ffffff"))
+        return
+    for tx, ty, v in under:
+        if v == CRUMBLE and (tx, ty) not in S.crumble:
+            S.crumble[(tx, ty)] = 1
+            snd(330, 200, .06, "square", .025)
+    if all(v in (1, 2, 3, 4, 5, 6) for _, _, v in under):
+        x0, x1 = math.floor(P.x / T) - 1, math.floor((P.x + P.w) / T) + 1
+        near = any(tile(x, y) >= SPIKE_UP for x in range(x0, x1 + 1) for y in range(fy - 2, fy + 1))
+        if not near:
+            P.safe = (P.x, P.y + P.h)
+
+
+def update_tiles():
+    """Crackers crumble a moment after being stepped on and grow back later; jelly settles."""
+    for c in list(S.crumble):
+        t = S.crumble[c]
+        x, y = c
+        if t > 0:
+            t += 1
+            if t >= CRUMBLE_T:
+                S.grid[y][x] = 0
+                t = -CRUMBLE_BACK
+                snd(220, 90, .14, "square", .035)
+                for i in range(6):
+                    S.fx.append(O(k="crumb", x=x * T + 4 + i * 5, y=y * T + 10, vx=(rnd() - .5) * 2,
+                                  vy=-rnd() * 1.5, life=30, c="#e8c07a" if i % 2 else "#b8843e"))
+        else:
+            t += 1
+            if t >= 0:
+                P = S.P
+                if P and ov(P, R(x * T, y * T, T, T)):
+                    t = -1
+                else:
+                    S.grid[y][x] = CRUMBLE
+                    del S.crumble[c]
+                    continue
+        S.crumble[c] = t
+    for c in list(S.jelly):
+        S.jelly[c] -= 1
+        if S.jelly[c] <= 0:
+            del S.jelly[c]
+
+
 def play_update():
     P, keys, tick = S.P, S.keys, S.tick
+    update_tiles()
+    if P.throw > 0:
+        P.throw -= 1
+        if P.throw == THROW_RELEASE:
+            if P.fire and not P.roll > 0:
+                throw_release(P)
+            else:
+                P.throw = 0
     if S.irisO < 40:
         S.irisO += 1
     if P.inv > 0:
@@ -1072,7 +1320,9 @@ def play_update():
         P.vy = -11.6
         P.ground = False
         snd(300, 600, .15, "square", .04)
-    if not jump and P.vy < -3.5:
+    if P.bnc and P.vy >= 0:
+        P.bnc = 0
+    if not jump and P.vy < -3.5 and not P.bnc:
         P.vy = -3.5
     if P.gp > 0:
         P.vy = -.3
@@ -1168,8 +1418,14 @@ def play_update():
                 ding()
                 S.fx.append(O(k="coin", x=tx * T + 16, y=ty * T - 8, vy=-5, life=28))
                 txt(tx * T + 16, ty * T - 30, "+200")
+    if P.ground:
+        stand_effects(P)
     if P.gpf and P.ground:
         gp_impact()
+    if spike_hit(P):
+        spike_hurt()
+        if S.state != "play":
+            return
     if P.y > VH + 40:
         die()
     for c in S.coins:
@@ -1207,11 +1463,24 @@ def play_update():
         s.x += s.vx
         s.y += s.vy
         s.life -= 1
+        s.age += 1
+        s.rot += s.vx * .11
+        s.trail.append((s.x + 5, s.y + 5))
+        del s.trail[:-10]
+        if S.tick % 2 == 0:
+            S.fx.append(O(k="ember", x=s.x + 5 + (rnd() - .5) * 6, y=s.y + 5 + (rnd() - .5) * 6,
+                          vx=-s.vx * .12 + (rnd() - .5), vy=(rnd() - .5) - .4, life=12 + rnd() * 10,
+                          r=1 + rnd() * 1.4))
         if solid(s.x + (10 if s.vx > 0 else 0), s.y + 5):
             s.life = 0
         elif s.vy > 0 and solid(s.x + 5, s.y + 10):
             s.y = math.floor((s.y + 10) / T) * T - 10
             s.vy = -5
+            S.fx.append(O(k="sizzle", x=s.x + 5, y=s.y + 10, life=10))
+            for _ in range(4):
+                S.fx.append(O(k="ember", x=s.x + 5, y=s.y + 9, vx=(rnd() - .5) * 3, vy=-1 - rnd() * 1.5,
+                              life=12 + rnd() * 6, r=1 + rnd()))
+            snd(1300, 500, .07, "sawtooth", .018)
         sr = R(s.x, s.y, 10, 10)
         for b in S.bshots:
             if s.life > 0 and b.life > 0 and ov(sr, R(b.x - 2, b.y - 2, 14, 14)):
@@ -1235,6 +1504,9 @@ def play_update():
             hit_boss()
         if s.y > VH:
             s.life = 0
+            s.quiet = 1
+        if s.life <= 0 and not s.quiet:
+            cookie_blast(s.x + 5, s.y + 5)
     S.shots = [s for s in S.shots if s.life > 0]
     update_enemies()
     K = S.KEYO
@@ -1341,7 +1613,8 @@ def update_boss():
         S.bossT += 1
         if S.CAGE:
             if S.bossT == 56 and not S.KEYO:
-                S.KEYO = O(x=max(77 * T, min(88 * T, B.x + B.w / 2)), y=B.y + 22, vy=-7, t=0, got=0)
+                # drop the key inside this arena (between its walls), wherever the boss fell
+                S.KEYO = O(x=max((S.AR0 + 4) * T, min(S.AR1 * T, B.x + B.w / 2)), y=B.y + 22, vy=-7, t=0, got=0)
                 spark_fx(S.KEYO.x, S.KEYO.y, "#ffd84d")
                 snd(700, 1400, .25, "sine", .09)
         elif S.bossT > 120:

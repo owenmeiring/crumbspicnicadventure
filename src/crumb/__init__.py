@@ -12,12 +12,13 @@ from . import art, game
 from . import ui as ui_mod
 from .audio import Audio
 from .canvas import Canvas
+from .editor import Editor
 from .game import S, VH, VW, O
 
 TITLE = "Crumb's Picnic Run"
 SAVE_DIR = Path(os.environ.get("APPDATA") or Path.home()) / "CrumbsPicnicRun"
 SAVE_FILE = SAVE_DIR / "save.json"
-DEFAULTS = {"sfx": True, "music": True, "fullscreen": False, "roll": 1, "best": 0}
+DEFAULTS = {"sfx": True, "music": True, "fullscreen": False, "roll": 1, "best": 0, "checkpoint": 0}
 STEP = 1 / 60
 
 PLAY_KEYS = {
@@ -45,6 +46,8 @@ class App:
         self.load()
         S.best = int(self.cfg.get("best", 0))
         S.ROLLSTYLE = int(self.cfg.get("roll", 1)) % len(game.ROLLNAMES)
+        cp = int(self.cfg.get("checkpoint", 0))
+        S.checkpoint = cp if cp in game.CHECKPOINTS else 0
         pygame.display.set_caption(TITLE)
         self.windowed_size = (1024, 768)
         self.screen = None
@@ -59,8 +62,14 @@ class App:
         game.AUDIO = self.audio
         game.on_rumble = self.rumble
         game.on_best = self.save_best
+        game.on_checkpoint = self.save_checkpoint
 
+        self.editor = Editor(self)
         self.ui = ui_mod.UI(self)
+        try:
+            pygame.scrap.init()
+        except Exception:
+            pass
         game.title_level()
         S.state = "title"
 
@@ -89,6 +98,10 @@ class App:
             SAVE_FILE.write_text(json.dumps(self.cfg, indent=2), "utf-8")
         except OSError:
             pass
+
+    def save_checkpoint(self):
+        self.cfg["checkpoint"] = S.checkpoint
+        self.save()
 
     def save_best(self):
         self.cfg["best"] = S.best
@@ -165,10 +178,21 @@ class App:
 
     # ------------------------------------------------------------ input
     def in_game(self):
-        return S.state not in ("title", "over", "win") and not self.ui.stack
+        return S.state not in ("title", "over", "win", "edit") and not self.ui.stack
+
+    EDITOR_EVENTS = (pygame.KEYDOWN, pygame.KEYUP, pygame.TEXTINPUT, pygame.MOUSEMOTION, pygame.MOUSEBUTTONDOWN,
+                     pygame.MOUSEBUTTONUP, pygame.MOUSEWHEEL)
 
     def handle(self, ev):
         t = ev.type
+        if S.state == "edit" and t in self.EDITOR_EVENTS:
+            if t == pygame.KEYDOWN and (ev.key == pygame.K_F11 or (ev.key == pygame.K_RETURN and ev.mod & pygame.KMOD_ALT)):
+                self.toggle("fullscreen")
+                return
+            if t == pygame.MOUSEMOTION:
+                self.mouse_seen = time.perf_counter()
+            self.editor.handle(ev)
+            return
         if t == pygame.QUIT:
             self.running = False
         elif t == pygame.VIDEORESIZE and not self.cfg["fullscreen"]:
@@ -309,18 +333,31 @@ class App:
 
     # ------------------------------------------------------------ loop
     def update(self):
+        if S.state == "edit":
+            self.editor.update()
+            S.keys = {}
+            game.update()
+            return
         if S.paused or "dev" in self.ui.stack:
             return
         S.keys = self.merged_keys() if self.in_game() else {}
         game.update()
 
     def render(self):
+        if S.state == "edit":
+            self.editor.draw()
+            self.present()
+            return
+        art.set_view(1, 0)
         title_free = S.state == "title" and not self.ui.stack
         art.draw_world(hide_free=title_free)
         art.draw_overlays()
         self.ui.draw()
         if title_free:
             art.draw_free_enemies()
+        self.present()
+
+    def present(self):
         if self.fade > 0:
             c = art.g
             c.setTransform(art.RS, 0, 0, art.RS, 0, 0)

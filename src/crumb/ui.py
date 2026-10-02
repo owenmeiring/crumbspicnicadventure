@@ -8,7 +8,7 @@ import math
 
 from . import art
 from .canvas import offscreen
-from .game import NAMES, ROLLNAMES, S, VH, VW
+from .game import LAST, NAMES, ROLLNAMES, S, VH, VW
 
 OL = "#2b1608"
 CREAM = "#fff3d6"
@@ -28,14 +28,34 @@ class Item:
 
 
 class Menu:
-    def __init__(self, items, back=None):
+    def __init__(self, items, back=None, grid=None):
         self.items = items
         self.sel = 0
         self.rects = []
         self.back = back
         self.pulse = 0
+        self.grid = grid  # optional rows of item indexes for 2-D navigation
+
+    def _cell(self):
+        for r, row in enumerate(self.grid):
+            if self.sel in row:
+                return r, row.index(self.sel)
+        return 0, 0
 
     def nav(self, action, sfx):
+        if self.grid and action in ("up", "down", "left", "right"):
+            r, c = self._cell()
+            if action in ("up", "down"):
+                r = (r + (1 if action == "down" else -1)) % len(self.grid)
+                c = min(c, len(self.grid[r]) - 1)
+            else:
+                row = self.grid[r]
+                if len(row) == 1:
+                    return
+                c = (c + (1 if action == "right" else -1)) % len(row)
+            self.sel = self.grid[r][c]
+            sfx("move")
+            return
         if action in ("up", "down"):
             self.sel = (self.sel + (1 if action == "down" else -1)) % len(self.items)
             sfx("move")
@@ -267,7 +287,7 @@ def _ribbon():
     c.restore()
 
 
-def draw_plaque(menu, i, cx, cy, w, h, size, primary, t):
+def draw_plaque(menu, i, cx, cy, w, h, size, primary, t, sides=(-1, 1)):
     c = g()
     it = menu.items[i]
     on = menu.sel == i
@@ -292,10 +312,19 @@ def draw_plaque(menu, i, cx, cy, w, h, size, primary, t):
     c.restore()
     if on:
         bob = sin(t * .15) * 2.5
-        for d in (-1, 1):
+        for d in sides:
             art.cookie_art(cx + d * (w / 2 + 16 + bob), cy, 7.5)
     s = pulse
     menu.rects.append((cx - w / 2 * s, cy - h / 2 * s, cx + w / 2 * s, cy + h / 2 * s + 5))
+
+
+TITLE_LAYOUT = [  # cx, cy, w, h, font size, primary, cookie sides
+    (VW / 2, 170, 210, 40, 25, True, (-1, 1)),
+    (VW / 2 - 78, 212, 148, 26, 14, False, (-1,)), (VW / 2 + 78, 212, 148, 26, 14, False, (1,)),
+    (VW / 2 - 78, 245, 148, 26, 14, False, (-1,)), (VW / 2 + 78, 245, 148, 26, 14, False, (1,)),
+    (VW / 2, 278, 110, 24, 13, False, (-1, 1)),
+]
+TITLE_GRID = [[0], [1, 2], [3, 4], [5]]
 
 
 def draw_title(menu, t):
@@ -304,9 +333,8 @@ def draw_title(menu, t):
     menu.rects = []
     draw_logo(t)
     draw_ribbon()
-    layout = [(170, 210, 40, 25, True), (212, 176, 28, 16, False), (246, 176, 28, 16, False), (280, 176, 28, 16, False)]
-    for i, (cy, w, h, size, primary) in enumerate(layout[:len(menu.items)]):
-        draw_plaque(menu, i, VW / 2, cy, w, h, size, primary, t)
+    for i, (cx, cy, w, h, size, primary, sides) in enumerate(TITLE_LAYOUT[:len(menu.items)]):
+        draw_plaque(menu, i, cx, cy, w, h, size, primary, t, sides)
     S.menu_rects = list(menu.rects)
     # best score badge
     best = "BEST " + str(S.best).zfill(6)
@@ -463,6 +491,178 @@ def draw_end(menu, title, lines, t, black=False):
         menu.rects.append((rx, ry, rx + rw, ry + 24))
 
 
+# ---------------------------------------------------------------- custom levels browser
+class CustomPanel:
+    """Lists the level files in the levels folder: play, edit or delete them, or import from the clipboard."""
+    ACTIONS = ["PLAY", "EDIT", "DELETE"]
+    FOOT = ["IMPORT FROM CLIPBOARD", "OPEN FOLDER", "BACK"]
+    ROWS = 6
+
+    def __init__(self, ui):
+        self.ui = ui
+        self.items = []
+        self.sel = 0
+        self.act = 0
+        self.top = 0
+        self.confirm = None
+        self.msg = ""
+        self.rects = []
+
+    def refresh(self):
+        from . import levels
+        self.items = levels.list_levels()
+        self.sel = 0 if self.items else len(self.items)
+        self.act = 0
+        self.top = 0
+        self.confirm = None
+
+    def count(self):
+        return len(self.items) + 1  # the footer row
+
+    def nav(self, action, sfx):
+        n = self.count()
+        on_foot = self.sel == len(self.items)
+        if action in ("up", "down"):
+            self.sel = (self.sel + (1 if action == "down" else -1)) % n
+            self.act = 0
+            self.confirm = None
+            sfx("move")
+        elif action in ("left", "right"):
+            k = len(self.FOOT) if on_foot else len(self.ACTIONS)
+            self.act = (self.act + (1 if action == "right" else -1)) % k
+            self.confirm = None
+            sfx("move")
+        elif action == "ok":
+            sfx("ok")
+            self.activate()
+        elif action == "back":
+            sfx("back")
+            self.ui.pop()
+        self.top = max(0, min(self.top, self.sel, max(0, len(self.items) - self.ROWS)))
+        if self.sel < len(self.items) and self.sel >= self.top + self.ROWS:
+            self.top = self.sel - self.ROWS + 1
+
+    def activate(self):
+        from . import levels
+        if self.sel == len(self.items):
+            what = self.FOOT[self.act]
+            if what == "BACK":
+                self.ui.pop()
+            elif what == "OPEN FOLDER":
+                self.ui.app.editor.open_folder()
+            else:
+                from .editor import clip_get
+                try:
+                    L = levels.parse_level(clip_get())
+                except ValueError as e:
+                    self.msg = f"Clipboard isn't a level: {e}"
+                    return
+                path = levels.save_level(L)
+                self.refresh()
+                self.msg = f'Imported "{L["name"]}" to levels\\{path.name}'
+            return
+        path, L = self.items[self.sel]
+        what = self.ACTIONS[self.act]
+        if what == "PLAY":
+            self.ui.stack = []
+            from .game import play_custom
+            play_custom(L, False)
+        elif what == "EDIT":
+            self.ui.app.editor.open(L, path)
+        elif self.confirm == self.sel:
+            levels.delete_level(path)
+            self.refresh()
+            self.msg = f'Deleted "{L["name"]}".'
+        else:
+            self.confirm = self.sel
+            self.msg = "Press DELETE again to remove this level for good."
+
+    def hit(self, x, y):
+        for i, (l, t, r, b, row, act) in enumerate(self.rects):
+            if l <= x <= r and t <= y <= b:
+                return i
+        return -1
+
+    def mouse_move(self, x, y, sfx):
+        i = self.hit(x, y)
+        if i >= 0:
+            row, act = self.rects[i][4:]
+            if (row, act) != (self.sel, self.act):
+                self.sel, self.act = row, act
+                sfx("move")
+
+    def mouse_down(self, x, y, sfx):
+        i = self.hit(x, y)
+        if i < 0:
+            return False
+        self.sel, self.act = self.rects[i][4:]
+        sfx("ok")
+        self.activate()
+        return True
+
+    def draw(self, t):
+        from .levels import THEMES
+        c = g()
+        dim(.55)
+        w, h = 430, 320
+        x, y = VW / 2 - w / 2, VH / 2 - h / 2
+        card(x, y, w, h)
+        text("CUSTOM LEVELS", VW / 2 + 1.8, y + 27 + 1.8, 24, "'Bagel Fat One'", OL)
+        text("CUSTOM LEVELS", VW / 2, y + 27, 24, "'Bagel Fat One'", RED)
+        self.rects = []
+        if not self.items:
+            text("No custom levels yet.", VW / 2, y + 100, 15, "800 Sniglet", OL)
+            text("Open the LEVEL BUILDER, make one and press Save,", VW / 2, y + 124, 11.5, "Sniglet", OL)
+            text("or copy a level's JSON and import it below.", VW / 2, y + 140, 11.5, "Sniglet", OL)
+        for vis, i in enumerate(range(self.top, min(len(self.items), self.top + self.ROWS))):
+            path, L = self.items[i]
+            ry = y + 50 + vis * 33
+            on = self.sel == i
+            art.rr(x + 16, ry, w - 32, 29, 7)
+            c.fillStyle = "#ffe3a0" if on else "#fff"
+            c.fill()
+            c.lineWidth = 2 if on else 1.4
+            c.strokeStyle = OL
+            c.stroke()
+            text(L["name"].upper(), x + 26, ry + 11, 13, "'Luckiest Guy'", OL, align="left", spacing=.8)
+            info = f"{THEMES[L['theme']]}  ·  {L['w']} wide" + ("  ·  boss" if L["boss"] else "")
+            text(info, x + 26, ry + 22.5, 9, "Sniglet", "#8a5a2b", align="left")
+            bx = x + w - 20
+            for a in range(len(self.ACTIONS) - 1, -1, -1):
+                label = self.ACTIONS[a]
+                if a == 2 and self.confirm == i:
+                    label = "SURE?"
+                bw = 50 if a == 2 else 40
+                bx -= bw + 4
+                hot = on and self.act == a
+                art.rr(bx, ry + 6, bw, 17, 5)
+                c.fillStyle = (RED if a != 0 else "#3f9d3a") if hot else "#f3e2c0"
+                c.fill()
+                c.lineWidth = 1.4
+                c.strokeStyle = OL
+                c.stroke()
+                text(label, bx + bw / 2, ry + 15.5, 10.5, "'Luckiest Guy'", CREAM if hot else OL,
+                     outline=2 if hot else 0, spacing=.6)
+                self.rects.append((bx, ry + 6, bx + bw, ry + 23, i, a))
+        if len(self.items) > self.ROWS:
+            text(f"{self.top + 1}-{min(len(self.items), self.top + self.ROWS)} of {len(self.items)}", x + w - 22,
+                 y + 27, 9, "Sniglet", "#8a5a2b", align="right")
+        fy = y + h - 34
+        widths = [170, 110, 70]
+        fx = VW / 2 - (sum(widths) + 8 * 2) / 2
+        for a, (label, bw) in enumerate(zip(self.FOOT, widths)):
+            hot = self.sel == len(self.items) and self.act == a
+            art.rr(fx, fy + 3, bw, 22, 7); c.fillStyle = OL; c.fill()
+            art.rr(fx, fy, bw, 22, 7); c.fillStyle = RED if hot else "#fff6dc"; c.fill()
+            c.lineWidth = 2; c.strokeStyle = OL; c.stroke()
+            text(label, fx + bw / 2, fy + 12, 12, "'Luckiest Guy'", CREAM if hot else "#d8382a",
+                 outline=2.4 if hot else 0, spacing=.8)
+            self.rects.append((fx, fy, fx + bw, fy + 25, len(self.items), a))
+            fx += bw + 8
+        if self.msg:
+            text(self.msg, VW / 2, fy - 11, 10, "800 Sniglet", "#8a5a2b")
+
+
 # ---------------------------------------------------------------- the UI controller
 class UI:
     def __init__(self, app):
@@ -470,11 +670,13 @@ class UI:
         self.stack = []
         self.t = 0
         self.title_menu = Menu([
-            Item("START GAME", self.start),
+            Item("START GAME", self.start_or_continue),
             Item("HOW TO PLAY", lambda: self.push("howto")),
             Item("OPTIONS", lambda: self.push("options")),
+            Item("LEVEL BUILDER", lambda: app.editor.open()),
+            Item("CUSTOM LEVELS", self.open_custom),
             Item("QUIT", app.quit),
-        ])
+        ], grid=TITLE_GRID)
         self.howto = Menu([Item("GOT IT", self.pop)], back=self.pop)
         self.options = Menu([
             Item("SOUND EFFECTS", lr=lambda d: app.toggle("sfx"), value=lambda: "ON" if app.cfg["sfx"] else "OFF"),
@@ -483,19 +685,19 @@ class UI:
             Item("FULLSCREEN", lr=lambda d: app.toggle("fullscreen"), value=lambda: "ON" if app.cfg["fullscreen"] else "OFF"),
             Item("BACK", self.pop),
         ], back=self.pop)
-        self.pause = Menu([
-            Item("RESUME", self.resume),
-            Item("RESTART LEVEL", self.restart),
-            Item("OPTIONS", lambda: self.push("options")),
-            Item("QUIT TO TITLE", self.quit_to_title),
-        ], back=self.resume)
-        self.over = Menu([Item("TRY AGAIN", self.start), Item("TITLE SCREEN", self.quit_to_title)],
-                         back=self.quit_to_title)
-        self.win = Menu([Item("PLAY AGAIN", self.start), Item("TITLE SCREEN", self.quit_to_title)],
-                        back=self.quit_to_title)
-        self.dev = Menu([Item(f"LEVEL {i + 1}  {n}", (lambda i=i: self.dev_go(i))) for i, n in enumerate(NAMES)] + [
+        self.pause = Menu([], back=self.resume)
+        self.over = Menu([], back=self.quit_to_title)
+        self.win = Menu([], back=self.quit_to_title)
+        self.custom = CustomPanel(self)
+        self.startmenu = Menu([
+            Item(lambda: f"CONTINUE  1-{S.checkpoint + 1}  {NAMES[S.checkpoint]}", self.cont),
+            Item("NEW GAME", self.new_game),
+            Item("BACK", self.pop),
+        ], back=self.pop)
+        self.dev = Menu([Item(f"1-{i + 1}  {n}", (lambda i=i: self.dev_go(i))) for i, n in enumerate(NAMES)] + [
             Item("ROLL SPRITE", lr=self._roll, value=lambda: ROLLNAMES[S.ROLLSTYLE]),
             Item("CLOSE", self.pop)], back=self.pop)
+        self._end_state = None
 
     # ---- flow
     def _roll(self, d):
@@ -511,10 +713,43 @@ class UI:
         if self.stack:
             self.stack.pop()
 
+    def open_custom(self):
+        self.custom.refresh()
+        self.custom.msg = ""
+        self.stack.append("custom")
+
     def start(self):
         self.stack = []
         from .game import start
         start()
+
+    def start_or_continue(self):
+        if S.checkpoint > 0:
+            self.push("startmenu")
+        else:
+            self.new_game()
+
+    def new_game(self):
+        S.checkpoint = 0
+        self.app.save_checkpoint()
+        self.start()
+
+    def cont(self):
+        self.stack = []
+        from .game import continue_game
+        continue_game()
+
+    def retry(self):
+        self.stack = []
+        from .game import restart_level, start
+        if S.CUST:
+            restart_level()
+        else:
+            start()
+
+    def to_editor(self):
+        self.stack = []
+        self.app.editor.resume()
 
     def resume(self):
         self.stack = []
@@ -527,13 +762,18 @@ class UI:
 
     def quit_to_title(self):
         self.stack = []
+        from_list = bool(S.CUST) and not S.CUSTEDIT
         from .game import to_title
         to_title()
         self.title_menu.sel = 0
+        if from_list:
+            self.title_menu.sel = 4
+            self.open_custom()
 
     def dev_go(self, i):
         self.stack = []
         from .game import load_level, new_player, note_best
+        S.CUST = None
         fresh = S.state not in ("play", "dead", "clear", "goal")
         if fresh:
             note_best()
@@ -547,9 +787,37 @@ class UI:
 
     def open_pause(self):
         if S.state in ("play", "dead", "goal", "free", "clear", "card") and not S.paused:
+            items = [Item("RESUME", self.resume), Item("RESTART LEVEL", self.restart)]
+            if S.CUSTEDIT:
+                items.append(Item("BACK TO EDITOR", self.to_editor))
+            items.append(Item("OPTIONS", lambda: self.push("options")))
+            if not S.CUSTEDIT:
+                items.append(Item("QUIT TO TITLE", self.quit_to_title))
+            self.pause.items = items
+            self.pause.back = self.resume
             S.paused = True
             self.stack = ["pause"]
             self.pause.sel = 0
+
+    def _end_menus(self):
+        """Game over and win menus depend on where the level came from."""
+        if self._end_state == (S.state, bool(S.CUST), S.CUSTEDIT, S.checkpoint):
+            return
+        self._end_state = (S.state, bool(S.CUST), S.CUSTEDIT, S.checkpoint)
+        if S.CUSTEDIT:
+            tail, back = Item("BACK TO EDITOR", self.to_editor), self.to_editor
+        elif S.CUST:
+            tail, back = Item("CUSTOM LEVELS", self.quit_to_title), self.quit_to_title
+        else:
+            tail, back = Item("TITLE SCREEN", self.quit_to_title), self.quit_to_title
+        if not S.CUST and S.checkpoint > 0:
+            self.over.items = [Item(f"CONTINUE FROM 1-{S.checkpoint + 1}", self.cont),
+                               Item("RESTART WORLD", self.new_game), tail]
+        else:
+            self.over.items = [Item("TRY AGAIN", self.retry), tail]
+        self.win.items = [Item("PLAY AGAIN", self.retry), tail]
+        self.over.back = self.win.back = back
+        self.over.sel = self.win.sel = 0
 
     # ---- input
     def active(self):
@@ -557,10 +825,10 @@ class UI:
             return getattr(self, self.stack[-1])
         if S.state == "title":
             return self.title_menu
-        if S.state == "over":
-            return self.over
-        if S.state == "win":
-            return self.win
+        if S.state in ("over", "win"):
+            self._end_menus()
+            return self.over if S.state == "over" else self.win
+        self._end_state = None
         return None
 
     def wants_input(self):
@@ -579,7 +847,9 @@ class UI:
 
     def mouse_move(self, x, y):
         m = self.active()
-        if m:
+        if isinstance(m, CustomPanel):
+            m.mouse_move(x, y, self.app.menu_sfx)
+        elif m:
             i = m.hit(x, y)
             if i >= 0 and i != m.sel:
                 m.sel = i
@@ -589,6 +859,8 @@ class UI:
         m = self.active()
         if not m:
             return False
+        if isinstance(m, CustomPanel):
+            return m.mouse_down(x, y, self.app.menu_sfx)
         i = m.hit(x, y)
         if i >= 0:
             m.sel = i
@@ -605,12 +877,17 @@ class UI:
         if S.state == "title":
             draw_title.panel_open = bool(self.stack)
             draw_title(self.title_menu, t)
-        if S.state == "over" and not self._over_stack():
+        if S.state in ("over", "win"):
+            self._end_menus()
+        if S.state == "over" and not self.stack:
             draw_end(self.over, "GAME OVER", [f"Score {S.score:06d}", f"Best {S.best:06d}"], t)
-        if S.state == "win" and not self._over_stack():
-            final = S.CI == 3
-            draw_end(self.win, "TOGETHER AGAIN!" if final else "PICNIC TIME!",
-                     [f"Score {S.score:06d}", f"Best {S.best:06d}"], t, black=final)
+        if S.state == "win" and not self.stack:
+            if S.CUST:
+                title, black = ("BOSS DEFEATED!" if S.CUST["boss"] else "LEVEL COMPLETE!"), False
+            else:
+                final = S.CI == LAST
+                title, black = ("TOGETHER AGAIN!" if final else "PICNIC TIME!"), final
+            draw_end(self.win, title, [f"Score {S.score:06d}", f"Best {S.best:06d}"], t, black=black)
         for name in self.stack:
             m = getattr(self, name)
             if name == "howto":
@@ -620,12 +897,15 @@ class UI:
                 panel_menu(m, "OPTIONS", VW / 2 - 160, 70, 320, t=t)
             elif name == "pause":
                 dim(.6)
-                panel_menu(m, "PAUSED", VW / 2 - 130, 90, 260, t=t, values=False)
+                panel_menu(m, "PAUSED", VW / 2 - 130, 80, 260, t=t, values=False)
             elif name == "dev":
                 dim(.6)
                 panel_menu(m, "DEV MENU", VW / 2 - 170, 40, 340, row_h=24, t=t)
+            elif name == "custom":
+                m.draw(t)
+            elif name == "startmenu":
+                dim(.5)
+                panel_menu(m, "START GAME", VW / 2 - 170, 110, 340, t=t, values=False)
         if S.state in ("play", "dead", "goal", "free", "clear") and S.paused and not self.stack:
             S.paused = False
 
-    def _over_stack(self):
-        return bool(self.stack)
